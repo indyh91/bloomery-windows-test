@@ -183,6 +183,7 @@ impl NodeCensus {
             HostRead::Given => o.u8(0),
             HostRead::MemAvailable => o.u8(1),
             HostRead::VmStats => o.u8(2),
+            HostRead::WindowsAvailable => o.u8(6),
             HostRead::Cgroup { path } => o.u8(3).str(path),
             HostRead::Machine => o.u8(4),
             HostRead::GivenAbove { capacity, from } => o.u8(5).u64(*capacity).str(from),
@@ -221,6 +222,7 @@ impl NodeCensus {
             0 => HostRead::Given,
             1 => HostRead::MemAvailable,
             2 => HostRead::VmStats,
+            6 => HostRead::WindowsAvailable,
             3 => HostRead::Cgroup {
                 path: i.str("host cgroup path")?,
             },

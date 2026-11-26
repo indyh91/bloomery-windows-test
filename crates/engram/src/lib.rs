@@ -48,12 +48,30 @@
 //! the same types; this crate does not go through it, since the header and
 //! its own mapping are all it needs.
 
+#[cfg(unix)]
+mod advice {
+    pub use libc::{
+        MADV_DONTNEED as DONTNEED, MADV_NORMAL as NORMAL, MADV_RANDOM as RANDOM,
+        MADV_WILLNEED as WILLNEED,
+    };
+}
+
+#[cfg(windows)]
+mod advice {
+    pub const NORMAL: i32 = 0;
+    pub const RANDOM: i32 = 1;
+    pub const WILLNEED: i32 = 2;
+    pub const DONTNEED: i32 = 3;
+}
+
 use std::fs::File;
-use std::os::fd::AsRawFd;
+
 use std::path::{Path, PathBuf};
 
 use gguf::{Inventory, LoadError, RawTensorInfo, ggml_type_info, inventory_of};
-use memmap2::{Advice, Mmap, UncheckedAdvice};
+use memmap2::Mmap;
+#[cfg(unix)]
+use memmap2::{Advice, UncheckedAdvice};
 
 pub mod direct;
 pub mod hash;
@@ -249,8 +267,8 @@ pub enum EngramError {
 
 /// A byte count as `posix_fadvise` takes it. The mapping is far under
 /// `off_t::MAX`, so this cannot fail on any host that mapped the file.
-fn fadvise_off(n: usize) -> libc::off_t {
-    libc::off_t::try_from(n).expect("a span inside a mapping fits an off_t")
+fn fadvise_off(n: usize) -> i64 {
+    i64::try_from(n).expect("a span inside a mapping fits an off_t")
 }
 
 /// One engram site's table: a row store mapped where it lies in its shard,
@@ -359,6 +377,7 @@ impl Site {
         // Random: `do_sync_mmap_readahead` returns early on VM_RAND_READ, so each
         // fault reads one page instead of 128 KiB around it. Every row of this
         // table is somewhere else; read-around would be 32x the bytes for nothing.
+        #[cfg(unix)]
         map.advise(Advice::Random).map_err(io("madvise(RANDOM)"))?;
 
         Ok(Site {
@@ -570,6 +589,7 @@ impl Site {
         // re-faults the same file bytes. memmap2 calls it unchecked because on an
         // anonymous mapping it would zero the range instead; this mapping is never
         // anonymous.
+        #[cfg(unix)]
         unsafe {
             self.map
                 .unchecked_advise_range(UncheckedAdvice::DontNeed, first, span)
@@ -583,8 +603,7 @@ impl Site {
 /// `posix_fadvise(DONTNEED)` over `at .. at + len` of `file`: the page-cache
 /// half of an eviction, after the mapping's own entries are dropped.
 fn fadvise_dontneed(file: &File, at: usize, len: usize) -> Result<(), std::io::Error> {
-    os::fadvise_dontneed(file.as_raw_fd(), fadvise_off(at), fadvise_off(len))
-        .map_err(std::io::Error::from)
+    os::drop_file_cache(file, fadvise_off(at), fadvise_off(len)).map_err(std::io::Error::from)
 }
 
 /// `ids` as runs of adjacent rows, each `(first, last)` inclusive, sorted and
@@ -618,7 +637,7 @@ fn page_size() -> usize {
     // SAFETY: `sysconf` reads a static system value and touches no memory of
     // ours; a negative return means the name is unknown, which _SC_PAGESIZE
     // never is on the platforms this crate builds for.
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(4096) as usize
+    os::page_bytes().expect("host page size") as usize
 }
 
 /// One row-gathered table's bytes in a file mapping and the row reads over
@@ -712,6 +731,25 @@ impl TableBytes<'_> {
 
     /// One `madvise(advice)` over `first .. first + len`, whole pages of the
     /// mapping `bytes` lies in.
+    #[cfg(windows)]
+    fn advise_pages(
+        &self,
+        first: usize,
+        len: usize,
+        advice: i32,
+        op: &'static str,
+    ) -> Result<(), EngramError> {
+        match advice {
+            advice::NORMAL | advice::RANDOM => Ok(()),
+            advice::WILLNEED => {
+                // SAFETY: the caller supplies whole pages in a live file mapping.
+                unsafe { os::prefetch(first as *mut _, len) }.map_err(|e| self.io(op, e.into()))
+            }
+            _ => Err(self.io(op, std::io::Error::from(std::io::ErrorKind::Unsupported))),
+        }
+    }
+
+    #[cfg(unix)]
     fn advise_pages(
         &self,
         first: usize,
@@ -743,7 +781,7 @@ impl TableBytes<'_> {
 
     /// [`Site::prefetch`]'s read: `WILLNEED` over the distinct page runs.
     fn prefetch(&self, ids: &[u32]) -> Result<(), EngramError> {
-        self.advise(ids, libc::MADV_WILLNEED, "madvise(WILLNEED)")
+        self.advise(ids, crate::advice::WILLNEED, "madvise(WILLNEED)")
     }
 
     /// [`Site::populate`]'s read: `POPULATE_READ` over the distinct page runs.
@@ -1004,11 +1042,18 @@ pub struct Faults {
 
 /// glibc `bits/resource.h` defines `RUSAGE_THREAD` as 1; the `libc` crate
 /// exposes it for uclibc and emscripten but not for linux-gnu.
+#[cfg(unix)]
 const RUSAGE_THREAD: libc::c_int = 1;
 
 /// This process's fault counts right now.
+#[cfg(unix)]
 pub fn faults() -> Faults {
     faults_of(libc::RUSAGE_SELF)
+}
+
+#[cfg(windows)]
+pub fn faults_thread() -> Faults {
+    panic!("the Engram IO profiler requires per-thread major and minor page fault counters")
 }
 
 /// The **calling thread's** fault counts right now.
@@ -1018,10 +1063,12 @@ pub fn faults() -> Faults {
 /// off the step thread is that the step thread stops taking them. Sample it on
 /// the thread it describes — a thread cannot ask for another's. Linux only: a
 /// kernel without `RUSAGE_THREAD` (macOS) refuses it, and that panics by name.
+#[cfg(unix)]
 pub fn faults_thread() -> Faults {
     faults_of(RUSAGE_THREAD)
 }
 
+#[cfg(unix)]
 fn faults_of(who: libc::c_int) -> Faults {
     // SAFETY: `usage` is a live, writable `rusage` for the duration of the call
     // and `getrusage` fills it or leaves it untouched.
@@ -1107,7 +1154,7 @@ mod tests {
                             at.is_multiple_of(page)
                                 && len > 0
                                 && len.is_multiple_of(page)
-                                && advice == libc::MADV_WILLNEED
+                                && advice == crate::advice::WILLNEED
                         }),
                         "prefetch must use WILLNEED over whole pages"
                     );

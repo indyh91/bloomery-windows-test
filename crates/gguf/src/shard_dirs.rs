@@ -147,12 +147,14 @@ fn sampled_windows(len: u64) -> Vec<(u64, usize)> {
 /// The first byte at which `own` and `copy` differ inside a sampled window of a file of `len`
 /// bytes; `None` when every window is equal.
 fn first_sampled_difference(own: &Path, copy: &Path, len: u64) -> std::io::Result<Option<u64>> {
-    use std::os::unix::fs::FileExt;
-    let (a, b) = (std::fs::File::open(own)?, std::fs::File::open(copy)?);
+    use std::io::{Read, Seek, SeekFrom};
+    let (mut a, mut b) = (std::fs::File::open(own)?, std::fs::File::open(copy)?);
     let (mut x, mut y) = (vec![0u8; SAMPLE_BYTES], vec![0u8; SAMPLE_BYTES]);
     for (at, n) in sampled_windows(len) {
-        a.read_exact_at(&mut x[..n], at)?;
-        b.read_exact_at(&mut y[..n], at)?;
+        a.seek(SeekFrom::Start(at))?;
+        a.read_exact(&mut x[..n])?;
+        b.seek(SeekFrom::Start(at))?;
+        b.read_exact(&mut y[..n])?;
         if let Some(i) = x[..n].iter().zip(&y[..n]).position(|(p, q)| p != q) {
             return Ok(Some(at + i as u64));
         }

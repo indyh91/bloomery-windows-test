@@ -16,6 +16,7 @@ use cuda_core::{
     sys,
 };
 use std::ffi::c_void;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::ptr;
 use std::sync::Arc;
@@ -548,7 +549,7 @@ impl Branch {
                         deps.cast_mut(),
                         data,
                         n,
-                        sys::CUstreamUpdateCaptureDependencies_flags_enum_CU_STREAM_SET_CAPTURE_DEPENDENCIES,
+                        sys::CUstreamUpdateCaptureDependencies_flags_enum_CU_STREAM_SET_CAPTURE_DEPENDENCIES as u32,
                     )
                 };
                 cu(rc, "cuStreamUpdateCaptureDependencies_v2")?;
@@ -738,6 +739,21 @@ impl MappedHost {
     /// number of host pages, as registration takes. `what` names the page in
     /// an error. A file made here is readable and writable by its user alone,
     /// and is removed again when the call fails. Load-time only.
+    #[cfg(windows)]
+    pub(crate) fn shared_file(
+        _: &Arc<CudaContext>,
+        _: &std::path::Path,
+        _: usize,
+        _: bool,
+        what: &'static str,
+    ) -> Result<MappedHost, GpuError> {
+        Err(GpuError::link(
+            what,
+            "inter-process tier nodes require Unix shared memory",
+        ))
+    }
+
+    #[cfg(unix)]
     pub(crate) fn shared_file(
         ctx: &Arc<CudaContext>,
         path: &std::path::Path,
@@ -950,7 +966,7 @@ pub fn op_wait_geq(addr: sys::CUdeviceptr, value: u32) -> sys::CUstreamBatchMemO
             sys::CUstreamBatchMemOpParams_union_CUstreamMemOpWaitValueParams_st__bindgen_ty_1 {
                 value,
             },
-        flags: sys::CUstreamWaitValue_flags_enum_CU_STREAM_WAIT_VALUE_GEQ,
+        flags: sys::CUstreamWaitValue_flags_enum_CU_STREAM_WAIT_VALUE_GEQ as u32,
         alias: 0,
     };
     p
@@ -966,7 +982,7 @@ pub fn op_write(addr: sys::CUdeviceptr, value: u32) -> sys::CUstreamBatchMemOpPa
             sys::CUstreamBatchMemOpParams_union_CUstreamMemOpWriteValueParams_st__bindgen_ty_1 {
                 value,
             },
-        flags: sys::CUstreamWriteValue_flags_enum_CU_STREAM_WRITE_VALUE_DEFAULT,
+        flags: sys::CUstreamWriteValue_flags_enum_CU_STREAM_WRITE_VALUE_DEFAULT as u32,
         alias: 0,
     };
     p
@@ -978,7 +994,7 @@ pub fn op_barrier_sys() -> sys::CUstreamBatchMemOpParams {
     let mut p = op_zero();
     p.memoryBarrier = sys::CUstreamBatchMemOpParams_union_CUstreamMemOpMemoryBarrierParams_st {
         operation: sys::CUstreamBatchMemOpType_enum_CU_STREAM_MEM_OP_BARRIER,
-        flags: sys::CUstreamMemoryBarrier_flags_enum_CU_STREAM_MEMORY_BARRIER_TYPE_SYS,
+        flags: sys::CUstreamMemoryBarrier_flags_enum_CU_STREAM_MEMORY_BARRIER_TYPE_SYS as u32,
     };
     p
 }

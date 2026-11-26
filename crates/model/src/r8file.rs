@@ -21,12 +21,12 @@
 //! before the data, and [`verify`] compares every byte with the source, which
 //! the card upload reads anyway.
 
+use os::FileExt;
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::ops::Range;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileExt, MetadataExt};
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Instant;
@@ -495,8 +495,8 @@ fn repack(s: &Stack<'_>, src: &[u8], dst: &mut [u8], threads: usize) -> Result<(
 }
 
 /// A file offset or length as the page-cache calls take it.
-fn off(path: &Path, v: u64) -> Result<libc::off_t, ModelError> {
-    libc::off_t::try_from(v).map_err(|_| {
+fn off(path: &Path, v: u64) -> Result<i64, ModelError> {
+    i64::try_from(v).map_err(|_| {
         io_err(
             path,
             "offset",
@@ -509,8 +509,7 @@ fn off(path: &Path, v: u64) -> Result<libc::off_t, ModelError> {
 /// cache.
 fn sync_and_drop(file: &File, path: &Path, range: Range<u64>) -> Result<(), ModelError> {
     let (at, len) = (off(path, range.start)?, off(path, range.end - range.start)?);
-    os::sync_range(file.as_raw_fd(), at, len)
-        .map_err(|e| io_err(path, "sync_file_range", e.into()))?;
+    os::sync_file_range(file, at, len).map_err(|e| io_err(path, "sync_file_range", e.into()))?;
     drop_cached(file, path, range)
 }
 
@@ -519,7 +518,7 @@ fn sync_and_drop(file: &File, path: &Path, range: Range<u64>) -> Result<(), Mode
 /// call keeps its pages, and the drop goes on.
 fn drop_cached(file: &File, path: &Path, range: Range<u64>) -> Result<(), ModelError> {
     let (at, len) = (off(path, range.start)?, off(path, range.end - range.start)?);
-    crate::placement::host_lock::drop_cached_pages(file.as_raw_fd(), at, len)
+    crate::placement::host_lock::drop_cached_pages(file, at, len)
         .map_err(|e| io_err(path, "posix_fadvise(DONTNEED)", e.into()))
 }
 
@@ -530,9 +529,10 @@ fn drop_cached(file: &File, path: &Path, range: Range<u64>) -> Result<(), ModelE
 fn publish(lock: PartLock, part: &Path, out: &Path, dir: &Path) -> Result<(), ModelError> {
     let file = lock.file();
     file.sync_all().map_err(|e| io_err(part, "fsync", e))?;
-    let ours = file.metadata().map_err(|e| io_err(part, "stat", e))?;
-    let named = std::fs::metadata(part).map_err(|e| io_err(part, "stat", e))?;
-    if (ours.dev(), ours.ino()) != (named.dev(), named.ino()) {
+    let named = File::open(part).map_err(|e| io_err(part, "open", e))?;
+    if os::file_identity(file).map_err(|e| io_err(part, "file identity", e))?
+        != os::file_identity(&named).map_err(|e| io_err(part, "file identity", e))?
+    {
         return Err(R8Error::Busy {
             path: part.to_path_buf(),
         }
@@ -1071,8 +1071,8 @@ fn tensor_names(g: &Gguf) -> impl Iterator<Item = &str> {
 
 /// The file at `path`: its device and inode.
 fn file_id(path: &Path) -> Result<(u64, u64), ModelError> {
-    let m = std::fs::metadata(path).map_err(|e| io_err(path, "stat", e))?;
-    Ok((m.dev(), m.ino()))
+    let file = File::open(path).map_err(|e| io_err(path, "open", e))?;
+    os::file_identity(&file).map_err(|e| io_err(path, "file identity", e))
 }
 
 /// A sidecar a holder keeps open, and the path it was opened from.

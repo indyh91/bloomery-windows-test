@@ -31,7 +31,10 @@ pub fn host_available_read() -> Result<(u64, HostRead), String> {
     os::page_bytes().map_err(|e| e.to_string())?;
     let levers = bloomery_levers::nvtier_levers().map_err(|e| e.to_string())?;
     let memory = os::host_memory().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
     let levels = cgroup_levels()?;
+    #[cfg(not(target_os = "linux"))]
+    let levels: Vec<(String, String, String, String)> = Vec::new();
     let texts: Vec<CgroupLevel<'_>> = levels
         .iter()
         .map(|(path, max, current, stat)| CgroupLevel {
@@ -98,6 +101,16 @@ fn platform_reading() -> HostRead {
     HostRead::VmStats
 }
 
+#[cfg(windows)]
+fn platform_total() -> &'static str {
+    "total physical memory (GlobalMemoryStatusEx)"
+}
+
+#[cfg(windows)]
+fn platform_reading() -> HostRead {
+    HostRead::WindowsAvailable
+}
+
 /// The arena's bytes `BLOOMERY_NVTIER_BYTES` gives the NVMe expert tier
 /// ([`bloomery_placement::placement::expert_nvme_tier`]'s `given`), `None`
 /// unset: read once with the room by a family's `describe`, so a gate that
@@ -129,6 +142,7 @@ fn cgroup_read(path: &str, file: &str) -> std::io::Result<String> {
 /// one), so it sets no limit and is skipped; any other failure to read a
 /// level's files is an error by name — the limit it may hold is not
 /// silently dropped.
+#[cfg(target_os = "linux")]
 fn cgroup_levels() -> Result<Vec<(String, String, String, String)>, String> {
     let controllers = match std::fs::read_to_string("/sys/fs/cgroup/cgroup.controllers") {
         Ok(text) => text,

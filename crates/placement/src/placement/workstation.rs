@@ -1493,7 +1493,10 @@ impl fmt::Display for HostShort {
                 HostRead::Given | HostRead::GivenAbove { .. } => {
                     format!("Raise or unset {}", bloomery_levers::HOST_ROOM)
                 }
-                HostRead::MemAvailable | HostRead::VmStats | HostRead::Cgroup { .. } => {
+                HostRead::MemAvailable
+                | HostRead::VmStats
+                | HostRead::WindowsAvailable
+                | HostRead::Cgroup { .. } => {
                     "Free host memory".to_string()
                 }
                 HostRead::Machine => "Ask for a shorter context".to_string(),
@@ -1793,6 +1796,8 @@ pub enum HostRead {
     /// virtual-memory statistics report them (macOS's
     /// `host_statistics64(HOST_VM_INFO64)`).
     VmStats,
+    /// Available physical memory from GlobalMemoryStatusEx.
+    WindowsAvailable,
     /// The room under the cgroup v2 memory limit at `path`, as
     /// [`cgroup_v2_path`] names it under `/sys/fs/cgroup`.
     Cgroup { path: String },
@@ -1815,6 +1820,9 @@ impl fmt::Display for HostRead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HostRead::MemAvailable => write!(f, "MemAvailable in /proc/meminfo"),
+            HostRead::WindowsAvailable => {
+                f.write_str("available physical memory (GlobalMemoryStatusEx)")
+            }
             HostRead::VmStats => write!(f, "the host's free and inactive pages (vm_statistics64)"),
             HostRead::Cgroup { path } => write!(
                 f,
@@ -1849,6 +1857,7 @@ impl HostRead {
     pub fn word(&self) -> String {
         match self {
             HostRead::MemAvailable => "MemAvailable".to_string(),
+            HostRead::WindowsAvailable => "available-physical".to_owned(),
             HostRead::VmStats => "vmstats".to_string(),
             HostRead::Cgroup { path } => format!("cgroup:{path}"),
             HostRead::Given => "given".to_string(),
@@ -1882,9 +1891,10 @@ pub const HOST_DRIFT: u64 = 512 * MIB;
 pub fn plan_room(room: &(u64, HostRead)) -> u64 {
     match room.1 {
         HostRead::Given | HostRead::GivenAbove { .. } | HostRead::Machine => room.0,
-        HostRead::MemAvailable | HostRead::VmStats | HostRead::Cgroup { .. } => {
-            room.0.saturating_sub(HOST_DRIFT)
-        }
+        HostRead::MemAvailable
+        | HostRead::VmStats
+        | HostRead::WindowsAvailable
+        | HostRead::Cgroup { .. } => room.0.saturating_sub(HOST_DRIFT),
     }
 }
 

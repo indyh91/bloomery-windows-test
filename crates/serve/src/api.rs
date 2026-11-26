@@ -1084,12 +1084,14 @@ const ENGINE_STOP: Duration = Duration::from_secs(5);
 /// The signal handlers' whole state, the only things a handler touches: the
 /// pipe end a first signal writes one byte to, and whether a first signal was
 /// already taken — both async-signal-safe to reach (one atomic, one `write`).
+#[cfg(unix)]
 struct Signals {
     /// The pipe's write end.
     w: libc::c_int,
     taken: AtomicBool,
 }
 
+#[cfg(unix)]
 static SIGNALS: OnceLock<Signals> = OnceLock::new();
 
 /// Whether the signal handlers were installed: once a process. The first
@@ -1103,6 +1105,7 @@ static SIGNALS_ARMED: AtomicBool = AtomicBool::new(false);
 /// does only async-signal-safe work — one atomic and one `write` to the pipe
 /// this function owns; everything else (`begin_stop`, the channel send)
 /// happens on the reader thread spawned here, which `on_first` runs on.
+#[cfg(unix)]
 pub(crate) fn install_signals(on_first: impl Fn(Stop) + Send + 'static) {
     if SIGNALS_ARMED.swap(true, Ordering::SeqCst) {
         return;
@@ -1149,6 +1152,7 @@ pub(crate) fn install_signals(on_first: impl Fn(Stop) + Send + 'static) {
 /// `SA_RESTART`, so a signal arriving mid-`accept` or mid-`read` restarts the
 /// call instead of failing it: the stop is carried by the pipe, not by an
 /// EINTR. Async-signal-safe (`sigaction` only).
+#[cfg(unix)]
 pub(crate) fn handle(sig: libc::c_int, action: libc::sighandler_t) {
     // SAFETY: an all-zero `sigaction` is a valid value — a null handler, an
     // empty mask, no flags — and only the fields set below are changed.
@@ -1163,6 +1167,7 @@ pub(crate) fn handle(sig: libc::c_int, action: libc::sighandler_t) {
 /// The `SIGINT`/`SIGTERM` handler: the first signal writes its number on the
 /// pipe for the reader thread; a second terminates at once, as llama-server's
 /// does. Async-signal-safe only: two atomics and two `write`s.
+#[cfg(unix)]
 extern "C" fn on_signal(sig: libc::c_int) {
     let Some(s) = SIGNALS.get() else {
         return;
@@ -1184,6 +1189,44 @@ extern "C" fn on_signal(sig: libc::c_int) {
     // (the reader thread gone) leaves this signal uncarried — the stop then
     // still has its other path, `POST /shutdown`.
     unsafe { libc::write(s.w, &byte as *const u8 as *const libc::c_void, 1) };
+}
+
+#[cfg(windows)]
+pub(crate) fn install_signals(on_first: impl Fn(Stop) + Send + 'static) {
+    use windows_sys::Win32::System::Console::{
+        CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler,
+    };
+    static POST: OnceLock<std::sync::mpsc::Sender<Stop>> = OnceLock::new();
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    unsafe extern "system" fn control(event: u32) -> i32 {
+        let stop = match event {
+            CTRL_C_EVENT => Stop::Sigint,
+            CTRL_BREAK_EVENT => Stop::Sigterm,
+            _ => return 0,
+        };
+        if TAKEN.swap(true, Ordering::SeqCst) {
+            // SAFETY: the immediate exit takes no pointers.
+            unsafe { libc::_exit(1) }
+        }
+        i32::from(POST.get().is_some_and(|tx| tx.send(stop).is_ok()))
+    }
+    if SIGNALS_ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    POST.set(tx).expect("console handler installed once");
+    thread::Builder::new()
+        .name("serve-signals".into())
+        .spawn(move || {
+            if let Ok(stop) = rx.recv() {
+                on_first(stop);
+            }
+        })
+        .expect("start console control receiver");
+    // SAFETY: control is a process-lifetime Win32 console callback.
+    if unsafe { SetConsoleCtrlHandler(Some(control), 1) } == 0 {
+        eprintln!("console control handler: {}", io::Error::last_os_error());
+    }
 }
 
 /// How the orderly stop's wait ended ([`Shared::wait_stop`],

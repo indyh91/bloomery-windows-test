@@ -82,6 +82,16 @@ pub(crate) fn detect_topology() -> Topology {
     detect_with(&|path| std::fs::read_to_string(path))
 }
 
+#[cfg(windows)]
+pub(crate) fn detect_topology() -> Topology {
+    let groups = os::cache_groups()
+        .expect("Windows processor and cache topology")
+        .into_iter()
+        .map(|(cores, l3_bytes)| CcdGroup { cores, l3_bytes })
+        .collect();
+    Topology { groups, read: true }
+}
+
 /// The machine's cpu topology: the performance level's cores and the cache
 /// they share. The platform names no cpu's level, so the performance level
 /// takes the machine's lowest logical cpu ids — one core a physical cpu of

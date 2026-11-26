@@ -19,10 +19,10 @@
 //! matrix's codes and scales adjacent stays so, and one stored with every scale plane before every
 //! code plane stays so. A layer is never split across shards.
 
+use os::FileExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 

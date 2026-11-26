@@ -88,7 +88,17 @@ pub fn enqueue_us(stream: &CudaStream) -> Result<f64, GpuError> {
 pub fn device_key(ctx: &CudaContext) -> Result<String, GpuError> {
     // The host's online CPUs, not the calling thread's mask: a load runs pinned.
     // SAFETY: sysconf reads a constant of the running system.
+    #[cfg(unix)]
     let cpus = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    #[cfg(windows)]
+    return Ok(format!(
+        "{} cpu={} logical={} kernels={:?}",
+        card_key(ctx)?,
+        std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),
+        os::logical_cpu_count(),
+        model::ops::host_kernels()
+    ));
+    #[cfg(unix)]
     Ok(format!(
         "{} {}",
         card_key(ctx)?,

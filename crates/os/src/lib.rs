@@ -12,13 +12,25 @@
 //! names. A type the two platforms shape differently (a `mincore` vector, a
 //! `statvfs` field) is settled here, so every caller sees one signature.
 
+#[cfg(windows)]
+mod win;
+#[cfg(unix)]
 use std::ffi::CString;
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::os::fd::RawFd;
+#[cfg(unix)]
+pub use std::os::unix::fs::FileExt;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(windows)]
+pub use win::*;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-compile_error!("bloomery-os has a body for Linux and macOS only; add this platform's calls here");
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+compile_error!(
+    "bloomery-os has a body for Linux, macOS and Windows only; add this platform's calls here"
+);
 
 /// A refusal by the platform: a call it does not have, or one the kernel
 /// refused.
@@ -78,6 +90,7 @@ impl From<OsError> for std::io::Error {
 }
 
 /// `p` as a C string; a path holding a NUL is refused.
+#[cfg(unix)]
 fn c_path(p: &Path) -> Result<CString, OsError> {
     use std::os::unix::ffi::OsStrExt;
     CString::new(p.as_os_str().as_bytes())
@@ -445,6 +458,7 @@ const MIN_PAGE: u64 = 4096;
 /// a power of two, or is under [`MIN_PAGE`] bytes, is refused by name: the
 /// row room counts pages, and a page it cannot count in is a page it cannot
 /// size a room in.
+#[cfg(unix)]
 pub fn page_bytes() -> Result<u64, OsError> {
     // SAFETY: `sysconf` reads no memory of ours and writes none.
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -616,7 +630,7 @@ pub fn perf_levels() -> Result<Vec<PerfLevel>, OsError> {
 /// macOS: the `hw.perflevel*` sysctls, one entry a level. Linux: the
 /// platform has no such levels — its cpu topology is read from sysfs — so
 /// the call is refused by name.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 pub fn perf_levels() -> Result<Vec<PerfLevel>, OsError> {
     Err(OsError::Unsupported {
         call: "sysctl(hw.perflevel*)",
@@ -627,16 +641,19 @@ pub fn perf_levels() -> Result<Vec<PerfLevel>, OsError> {
 ///
 /// Linux: `getrusage`'s `ru_maxrss`, in kibibytes, in bytes. macOS: the
 /// same field, in bytes as that platform reports it.
+#[cfg(unix)]
 pub fn max_rss_bytes() -> Result<u64, OsError> {
     max_rss_of(libc::RUSAGE_SELF)
 }
 
 /// The peak resident set size of the largest child this process has waited
 /// for, in bytes, read as [`max_rss_bytes`] reads its own.
+#[cfg(unix)]
 pub fn children_max_rss_bytes() -> Result<u64, OsError> {
     max_rss_of(libc::RUSAGE_CHILDREN)
 }
 
+#[cfg(unix)]
 fn max_rss_of(who: libc::c_int) -> Result<u64, OsError> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     // SAFETY: `usage` is storage for one `rusage`, which the call fills.
@@ -770,6 +787,20 @@ pub unsafe fn advise_populate(_addr: *mut libc::c_void, _len: usize) -> Result<(
     })
 }
 
+/// Read ahead on Windows, then touch each page. Prefetch alone only queues an advisory read.
+///
+/// # Safety
+/// The range must remain readable for the call.
+#[cfg(windows)]
+pub unsafe fn advise_populate(addr: *mut libc::c_void, len: usize) -> Result<(), OsError> {
+    let page = page_bytes()?;
+    // SAFETY: both operations read inside the caller's live mapping.
+    unsafe {
+        let _ = win::prefetch(addr, len);
+        touch(addr, len, page)
+    }
+}
+
 /// The platform's huge-page advice for `addr .. addr + len`: back it with
 /// huge pages where the kernel can, so that its first writes fault once a
 /// huge page instead of once a base page.
@@ -802,7 +833,7 @@ pub unsafe fn advise_huge(addr: *mut libc::c_void, len: usize) -> Result<(), OsE
 /// # Safety
 /// `addr .. addr + len` must be whole pages of private anonymous memory the
 /// caller owns.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub unsafe fn advise_huge(_addr: *mut libc::c_void, _len: usize) -> Result<(), OsError> {
     Err(OsError::Unsupported {
         call: "madvise(MADV_HUGEPAGE)",
@@ -922,6 +953,7 @@ fn mincore_addr(addr: *mut libc::c_void) -> *const libc::c_void {
 /// # Safety
 /// `addr .. addr + len` must be inside one live mapping, and `vec` must hold
 /// one byte for each of the pages of that range.
+#[cfg(unix)]
 pub unsafe fn mincore(addr: *mut libc::c_void, len: usize, vec: &mut [u8]) -> Result<(), OsError> {
     // SAFETY: the caller's contract above; mincore only reads the page tables
     // and writes nothing through `addr`.
@@ -930,6 +962,28 @@ pub unsafe fn mincore(addr: *mut libc::c_void, len: usize, vec: &mut [u8]) -> Re
         return Err(OsError::Io(std::io::Error::last_os_error()));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+pub use libc::{mlock as lock_pages, munlock as unlock_pages};
+
+#[cfg(unix)]
+pub fn file_identity(file: &File) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = file.metadata()?;
+    Ok((m.dev(), m.ino()))
+}
+
+#[cfg(unix)]
+pub fn drop_file_cache(file: &File, at: i64, len: i64) -> Result<(), OsError> {
+    use std::os::fd::AsRawFd;
+    fadvise_dontneed(file.as_raw_fd(), at, len)
+}
+
+#[cfg(unix)]
+pub fn sync_file_range(file: &File, at: i64, len: i64) -> Result<(), OsError> {
+    use std::os::fd::AsRawFd;
+    sync_range(file.as_raw_fd(), at, len)
 }
 
 #[cfg(test)]

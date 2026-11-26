@@ -99,8 +99,8 @@
 //! over the expert it evicted, and the threads never take the pool's dispatch
 //! lock or the books' lock, and never wait on the card.
 
+use os::FileExt;
 use std::ops::Range;
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};

@@ -43,10 +43,10 @@
 //! reaches, which connects on to rank 0 and passes rank 0's bytes on; a rank
 //! with neither opens them at rank 0's control address.
 
+use os::FileExt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, sync_channel};
@@ -176,6 +176,7 @@ pub fn inside(name: &str) -> bool {
 /// refused by name. The record then lists every file of `files`. A name not
 /// [`inside`] is refused. Load-time only.
 pub fn verify(dir: &Path, files: &[SourceFile], record: &Path) -> Result<(), GpuError> {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let shape = |e: String| GpuError::shape(WHAT, e);
     let stamps = files
@@ -190,6 +191,9 @@ pub fn verify(dir: &Path, files: &[SourceFile], record: &Path) -> Result<(), Gpu
             let path = dir.join(&f.name);
             let m =
                 std::fs::metadata(&path).map_err(|e| shape(format!("{}: {e}", path.display())))?;
+            #[cfg(windows)]
+            return Ok(format!("{}\t{}\t{}", hex(&f.digest), m.len(), f.name));
+            #[cfg(unix)]
             Ok(format!(
                 "{}\t{}\t{}.{:09}\t{}:{}\t{}.{:09}\t{}",
                 hex(&f.digest),
@@ -204,7 +208,11 @@ pub fn verify(dir: &Path, files: &[SourceFile], record: &Path) -> Result<(), Gpu
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(unix)]
     let known = std::fs::read_to_string(record).unwrap_or_default();
+    // Rehash on Windows, where the Unix inode/change-time stamp is unavailable.
+    #[cfg(windows)]
+    let known = String::new();
     let known: std::collections::HashSet<&str> = known.lines().collect();
     let todo: Vec<&SourceFile> = files
         .iter()
@@ -1088,8 +1096,12 @@ struct Out {
 
 impl Out {
     fn open(store: &Store, file: &SourceFile) -> Result<Out, String> {
+        #[cfg(unix)]
         use std::os::unix::fs::OpenOptionsExt;
         let cached = store.sparse(file)?;
+        #[cfg(windows)]
+        let direct = None;
+        #[cfg(unix)]
         let direct = OpenOptions::new()
             .write(true)
             .custom_flags(libc::O_DIRECT)

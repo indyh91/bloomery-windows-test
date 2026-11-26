@@ -267,6 +267,19 @@ pub fn sibling_of(cpu: usize) -> Option<usize> {
     cpu_list(&list).find(|&c| c != cpu)
 }
 
+#[cfg(windows)]
+#[must_use]
+pub fn sibling_of(cpu: usize) -> Option<usize> {
+    os::cache_groups()
+        .ok()?
+        .into_iter()
+        .flat_map(|(cores, _)| cores)
+        .find(|siblings| siblings.contains(&(cpu as u32)))?
+        .into_iter()
+        .find(|&c| c as usize != cpu)
+        .map(|c| c as usize)
+}
+
 /// No sysfs SMT sibling is available on macOS.
 #[cfg(target_os = "macos")]
 #[must_use]

@@ -58,3 +58,6 @@ libc.workspace = true
 [dev-dependencies]
 # The media tests' flat megapixel PNGs: the same pinned encoder the vision crate's image tests use.
 png = "=0.18.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Security"] }

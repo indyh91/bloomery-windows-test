@@ -22,3 +22,7 @@ rustflags = ["-C", "target-cpu=native"]
 # same entry `cargo oxide new` writes into a project's .cargo/config.toml. bloomery's own crates use no feature gate.
 [env]
 RUSTC_BOOTSTRAP = "1"
+
+# Cascade Lake (Xeon Gold 6226). Keep the same host ISA in native and CI builds.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64-v3", "-Z", "tune-cpu=cascadelake"]

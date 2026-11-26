@@ -15,8 +15,8 @@
 //! The plan serves the placed load (`crates/gpu-ernie55`): every layer's dense part and the stores
 //! on the stage card, each routed layer's card share of its experts by the common card leg's rule
 //! (the routed rule of `Program::Ernie55Body`) and the rest on the host tier. The body's host run is
-//! the common one, so the plan pages the host experts the room cannot hold
-//! ([`PlanInputs::with_nvme_tier`]). What the file asks beyond the description ([`Ops`]) is refused
+//! the common one, so on Linux the plan pages the host experts the room cannot hold
+//! ([`PlanInputs::with_nvme_tier`]). Native Windows requires the host share to fit in RAM. What the file asks beyond the description ([`Ops`]) is refused
 //! by name ([`PlanInputs::read`]) until a program of this family runs it.
 
 use gguf::Split;
@@ -246,12 +246,15 @@ impl PlanInputs {
         let read = spec::read(split)?;
         let reserve = prompt_reserve_bytes(&hp);
         let (partials, block) = hca_partials_block(&hp);
-        Ok(PlanInputs::new(ENGINE, hp, read.tensors, read.spec)?
+        let inputs = PlanInputs::new(ENGINE, hp, read.tensors, read.spec)?
             .with_f32_index_keys()
             .with_prompt_reserve(reserve)
             .with_position_scratch(mla_scores_row())
-            .with_block_scratch(partials, block)
-            .with_nvme_tier())
+            .with_block_scratch(partials, block);
+        // The native Windows ERNIE workstation keeps its host experts resident in RAM.
+        #[cfg(not(windows))]
+        let inputs = inputs.with_nvme_tier();
+        Ok(inputs)
     }
 
     /// [`PlanInputs::describe`], then the file refused with every feature the engine does not run

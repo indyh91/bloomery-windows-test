@@ -24,7 +24,7 @@ use std::fmt;
 use std::fs::File;
 use std::io;
 use std::ops::Range;
-use std::os::fd::AsRawFd;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -632,6 +632,8 @@ fn cut(runs: &[Range<u64>], n: u64) -> Vec<Runs> {
 pub struct HostLock {
     /// `(address, length)` of every span locked.
     spans: Vec<(usize, usize)>,
+    #[cfg(windows)]
+    _quota: os::LockQuota,
     walk: Walk,
     /// Dropped after the spans are unlocked (fields drop after `drop`).
     _sidecar: Option<Arc<Sidecar>>,
@@ -643,12 +645,19 @@ impl HostLock {
     /// just before locks at page-table speed. A refusal — `RLIMIT_MEMLOCK`,
     /// most often — unlocks what was taken and names the limit.
     pub fn lock(src: R8Source<'_>, set: &HostSet) -> Result<HostLock, PlacementError> {
+        #[cfg(windows)]
+        let quota = os::LockQuota::reserve(set.bytes()).map_err(|e| {
+            PlacementError::Host(format!(
+                "reserve Windows working set for {} B of host experts: {e}",
+                set.bytes()
+            ))
+        })?;
         let (spans, walked) = walk(src, set, |span| {
             // SAFETY: `span` is a live sub-slice of one of the set's mappings:
             // a shard's read-only file mapping, or the sidecar's, which is its
             // file's mapping or a resident anonymous copy. mlock faults its
             // pages in and pins them on either kind, and never writes them.
-            if unsafe { libc::mlock(span.as_ptr().cast(), span.len()) } == 0 {
+            if unsafe { os::lock_pages(span.as_ptr().cast(), span.len()) } == 0 {
                 Ok(0)
             } else {
                 let e = io::Error::last_os_error();
@@ -657,6 +666,8 @@ impl HostLock {
         });
         let mut lock = HostLock {
             spans,
+            #[cfg(windows)]
+            _quota: quota,
             walk: Walk {
                 chunks: Vec::new(),
                 wall: Duration::ZERO,
@@ -709,13 +720,19 @@ impl Drop for HostLock {
             // after this loop. A failure leaves them locked until the mapping
             // goes, and a drop has no one to report it to.
             unsafe {
-                libc::munlock(addr as *const libc::c_void, len);
+                os::unlock_pages(addr as *const libc::c_void, len);
             }
         }
     }
 }
 
 /// `RLIMIT_MEMLOCK` of this process, for an `mlock` refusal's message.
+#[cfg(windows)]
+fn memlock_limit() -> String {
+    "Windows working-set quota for VirtualLock".into()
+}
+
+#[cfg(unix)]
 fn memlock_limit() -> String {
     let mut lim = libc::rlimit {
         rlim_cur: 0,
@@ -883,8 +900,9 @@ impl YieldPages {
                 // SAFETY: munlock reads no memory; `addr .. addr + len` is the file's mapping,
                 // which outlives this owner (its contract, as `HostLock`'s), and the span lies
                 // inside it (checked above).
-                if unsafe { libc::munlock((addr + span.0) as *const libc::c_void, span.1 - span.0) }
-                    != 0
+                if unsafe {
+                    os::unlock_pages((addr + span.0) as *const libc::c_void, span.1 - span.0)
+                } != 0
                 {
                     return Err(PlacementError::Host(format!(
                         "munlock of {} bytes {first}..{end}: {}",
@@ -1047,6 +1065,7 @@ impl<'a> FileMapping<'a> {
 /// cache's copy goes. The one owner of page release: [`PageDrop`] and
 /// `r8file::verify` call it, and [`release_file_pages`] for a file outside a
 /// split.
+#[cfg(unix)]
 pub(crate) fn drop_pages(
     name: &dyn fmt::Display,
     file: &File,
@@ -1090,15 +1109,26 @@ pub(crate) fn drop_pages(
         }
     }
     let off = |v: u64| {
-        libc::off_t::try_from(v)
+        i64::try_from(v)
             .map_err(|_| PlacementError::Host(format!("{name} offset {v} passes off_t")))
     };
-    drop_cached_pages(file.as_raw_fd(), off(first)?, off(end - first)?).map_err(|e| {
+    drop_cached_pages(file, off(first)?, off(end - first)?).map_err(|e| {
         PlacementError::Host(format!(
             "posix_fadvise(DONTNEED) of {name} bytes {first}..{end}: {e}"
         ))
     })?;
     Ok(end - first)
+}
+
+/// Windows keeps the clean mapped pages under its working-set manager.
+#[cfg(windows)]
+pub(crate) fn drop_pages(
+    _: &dyn fmt::Display,
+    _: &File,
+    _: Option<FileMapping<'_>>,
+    _: Range<u64>,
+) -> Result<u64, PlacementError> {
+    Ok(0)
 }
 
 /// [`PageDrop::release`] for a file outside a split (a checkpoint folder's
@@ -1136,12 +1166,8 @@ static SAID_FADVISE: AtomicBool = AtomicBool::new(false);
 /// where the platform has such a call. A platform without one keeps its
 /// pages: the refusal is the platform saying so, the line says it once, and
 /// the drop goes on. Any other error is the caller's to refuse.
-pub(crate) fn drop_cached_pages(
-    fd: std::os::fd::RawFd,
-    at: libc::off_t,
-    len: libc::off_t,
-) -> Result<(), os::OsError> {
-    match os::fadvise_dontneed(fd, at, len) {
+pub(crate) fn drop_cached_pages(file: &File, at: i64, len: i64) -> Result<(), os::OsError> {
+    match os::drop_file_cache(file, at, len) {
         Ok(()) => Ok(()),
         Err(os::OsError::Unsupported {
             call: "posix_fadvise",
@@ -1164,7 +1190,7 @@ pub(crate) const NO_POPULATE_READ: &str = "host populate: madvise(MADV_POPULATE_
 
 /// The line a populate prints once when the platform has no
 /// `MADV_POPULATE_READ`.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) const NO_POPULATE_READ: &str = "host populate: this platform has no madvise(MADV_POPULATE_READ), \
                                 so the load reads one byte a page instead";
 

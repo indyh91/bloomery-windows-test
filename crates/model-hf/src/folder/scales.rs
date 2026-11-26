@@ -15,9 +15,9 @@
 //! key opens another path, so older headers can still reopen their generation. Older files stay
 //! in the store while readers may hold their paths.
 
+use os::FileExt;
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::UNIX_EPOCH;

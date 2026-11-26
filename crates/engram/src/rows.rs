@@ -40,8 +40,8 @@ impl PageAdvice {
     /// The `madvise` advice and the name a refusal gives it.
     fn madvise(self) -> (libc::c_int, &'static str) {
         match self {
-            PageAdvice::Random => (libc::MADV_RANDOM, "madvise(RANDOM)"),
-            PageAdvice::Normal => (libc::MADV_NORMAL, "madvise(NORMAL)"),
+            PageAdvice::Random => (crate::advice::RANDOM, "madvise(RANDOM)"),
+            PageAdvice::Normal => (crate::advice::NORMAL, "madvise(NORMAL)"),
         }
     }
 }
@@ -203,7 +203,7 @@ impl SplitTable {
         let file = self.file()?;
         let base = self.shard()?.mapping().as_ptr() as usize;
         for (first, span) in spans {
-            view.advise_pages(first, span, libc::MADV_DONTNEED, "madvise(DONTNEED)")?;
+            view.advise_pages(first, span, crate::advice::DONTNEED, "madvise(DONTNEED)")?;
             fadvise_dontneed(file, first - base, span)
                 .map_err(|e| view.io("posix_fadvise(DONTNEED)", e))?;
         }
@@ -220,7 +220,7 @@ impl SplitTable {
         view.advise_pages(
             map.as_ptr() as usize,
             map.len().div_ceil(self.page) * self.page,
-            libc::MADV_DONTNEED,
+            crate::advice::DONTNEED,
             "madvise(DONTNEED)",
         )?;
         fadvise_dontneed(file, 0, 0).map_err(|e| view.io("posix_fadvise(DONTNEED)", e))

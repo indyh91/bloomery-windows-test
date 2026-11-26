@@ -49,29 +49,6 @@ pub(super) static STOPS: AtomicU64 = AtomicU64::new(0);
 /// setting is applied again.
 pub(super) static GONE: AtomicBool = AtomicBool::new(false);
 
-/// What decides whether a process takes keys ([`Seen::takes_keys`]).
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Seen<'a> {
-    /// `BLOOMERY_SCREEN`.
-    pub(super) on: bool,
-    pub(super) stdin_tty: bool,
-    pub(super) stderr_tty: bool,
-    /// The process is in the terminal's foreground group ([`foreground`]).
-    pub(super) foreground: bool,
-    /// `TERM`, `None` unset.
-    pub(super) term: Option<&'a str>,
-}
-
-impl Seen<'_> {
-    /// Whether the process may take keys: the screen on, stdin and stderr
-    /// terminals, the process in the foreground (a background one that
-    /// changes the settings is stopped by `SIGTTOU`), and a terminal that is
-    /// not `dumb`.
-    pub(super) fn takes_keys(self) -> bool {
-        self.on && self.stdin_tty && self.stderr_tty && self.foreground && self.term != Some("dumb")
-    }
-}
-
 /// Whether this process's group is the terminal's foreground group; `false`
 /// when stdin is not the controlling terminal (`tcgetpgrp` fails).
 pub(super) fn foreground() -> bool {
@@ -450,7 +427,8 @@ pub(super) fn restore_on_panic(utf8: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SPILL_LINE_BYTES, SPILL_LINES, Seen, Spill};
+    use super::{SPILL_LINE_BYTES, SPILL_LINES, Spill};
+    use crate::live::Seen;
 
     #[test]
     fn a_signal_set_contains_only_its_signal() {

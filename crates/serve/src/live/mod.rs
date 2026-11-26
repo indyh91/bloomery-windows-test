@@ -3,7 +3,7 @@
 //! server serves on throughout, and `Ctrl+C` stops it from either screen.
 //!
 //! It takes keys only where a person can press them and nothing else is
-//! disturbed ([`term::Seen::takes_keys`]): `BLOOMERY_SCREEN` on ([`enable`]), stdin
+//! disturbed ([`Seen::takes_keys`]): `BLOOMERY_SCREEN` on ([`enable`]), stdin
 //! and stderr terminals, the process in the terminal's foreground group,
 //! and a terminal that is not `dumb`. Elsewhere it changes nothing and no
 //! screen names its key. While it is closed its thread waits on stdin and
@@ -23,7 +23,13 @@ mod parts;
 #[path = "../../tests/common/process.rs"]
 mod process;
 mod ring;
+#[cfg(unix)]
 mod term;
+#[cfg(windows)]
+#[path = "console.rs"]
+mod term;
+#[cfg(windows)]
+pub(crate) use term::console_size;
 mod view;
 
 use std::collections::VecDeque;
@@ -38,6 +44,30 @@ pub(crate) use view::{Now, Phase, Slot, Status};
 
 use crate::screen::{self, Marks, Style};
 use term::Capture;
+
+/// Whether this process can take interactive console keys.
+#[derive(Clone, Copy, Debug)]
+struct Seen<'a> {
+    /// `BLOOMERY_SCREEN`.
+    pub(super) on: bool,
+    pub(super) stdin_tty: bool,
+    pub(super) stderr_tty: bool,
+    /// The process is in the terminal's foreground group ([`foreground`]).
+    pub(super) foreground: bool,
+    /// `TERM`, `None` unset.
+    pub(super) term: Option<&'a str>,
+}
+
+impl Seen<'_> {
+    /// Whether the process may take keys: the screen on, stdin and stderr
+    /// terminals, the process in the foreground (a background one that
+    /// changes the settings is stopped by `SIGTTOU`), and a terminal that is
+    /// not `dumb`.
+    pub(super) fn takes_keys(self) -> bool {
+        self.on && self.stdin_tty && self.stderr_tty && self.foreground && self.term != Some("dumb")
+    }
+}
+
 use view::Fixed;
 
 /// How often the open view draws a frame, in milliseconds.
@@ -71,10 +101,10 @@ pub fn enable(on: bool) {
     ON.store(on, Ordering::SeqCst);
 }
 
-/// Whether the server takes the view's keys ([`term::Seen::takes_keys`]).
+/// Whether the server takes the view's keys ([`Seen::takes_keys`]).
 pub(crate) fn keys() -> bool {
     let term = Style::term();
-    term::Seen {
+    Seen {
         on: ON.load(Ordering::SeqCst),
         stdin_tty: io::stdin().is_terminal(),
         stderr_tty: io::stderr().is_terminal(),

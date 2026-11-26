@@ -37,12 +37,15 @@
 //! layout reads the same whichever commit wrote it, and a change to any
 //! part, its order or its encoding raises [`STATE_FORMAT`].
 
+#[cfg(unix)]
 use std::ffi::OsStr;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::ops::Range;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+
 use std::path::PathBuf;
 
 use bloomery_gpu::checkpoint::bytes::{self, Put, Take};
@@ -477,7 +480,20 @@ impl Header {
         w.vals(&STATE_TAG)?;
         w.vals(&[STATE_FORMAT])?;
         w.name(self.who.arch.as_bytes())?;
+        #[cfg(unix)]
         w.name(self.who.file.as_os_str().as_bytes())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let units: Vec<_> = self
+                .who
+                .file
+                .as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            w.name(&units)?;
+        }
         w.name(self.who.card.as_bytes())?;
         w.count(self.who.ctx)?;
         w.count(self.slots)?;
@@ -519,7 +535,21 @@ impl Header {
                 String::from_utf8_lossy(&arch)
             )));
         }
-        let file = PathBuf::from(OsStr::from_bytes(&r.name("the model file")?));
+        let name = r.name("the model file")?;
+        #[cfg(unix)]
+        let file = PathBuf::from(OsStr::from_bytes(&name));
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::ffi::OsStringExt;
+            if name.len() % 2 != 0 {
+                return Err(refused("invalid wide model file name".to_owned()));
+            }
+            let units: Vec<_> = name
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect();
+            PathBuf::from(std::ffi::OsString::from_wide(&units))
+        };
         let card = String::from_utf8(r.name("the card")?)
             .map_err(|e| refused(format!("a card name that is not UTF-8: {e}")))?;
         let ctx = r.count("the context")?;

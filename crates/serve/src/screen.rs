@@ -32,6 +32,7 @@
 
 use std::cell::RefCell;
 use std::io::IsTerminal;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -202,7 +203,11 @@ fn paint(lines: &[String], style: Style, live: bool) -> bool {
     if Start::new(lines).listening().is_none() {
         return false;
     }
-    let (columns, _) = match winsize(std::io::stderr().as_raw_fd()) {
+    #[cfg(unix)]
+    let size = winsize(std::io::stderr().as_raw_fd());
+    #[cfg(windows)]
+    let size = crate::live::console_size();
+    let (columns, _) = match size {
         Ok(size) => size,
         Err(e) => {
             eprintln!("start screen: terminal width: {e}");
@@ -223,6 +228,7 @@ fn paint(lines: &[String], style: Style, live: bool) -> bool {
 }
 
 /// The terminal's columns and rows; an invalid or non-terminal fd is an error.
+#[cfg(unix)]
 pub(crate) fn winsize(fd: std::os::fd::RawFd) -> std::io::Result<(u16, u16)> {
     let mut size = libc::winsize {
         ws_row: 0,

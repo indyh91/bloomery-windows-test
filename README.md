@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/midagedev/bloomery/releases/tag/v0.3.17">0.3.17 release notes</a> ·
+  <a href="docs/windows-ernie.md">Native Windows · ERNIE on RTX 3090</a> ·
   <a href="docs/models.md">Models</a> ·
   <a href="docs/serving.md">Serving</a> ·
   <a href="docs/agents.md">Agents</a> ·

@@ -125,7 +125,12 @@ pub const GREEDY_MARGIN: f32 = 1.5;
 pub type GateError = Box<dyn std::error::Error>;
 
 /// Kill the child when its spawning process dies, including while stopped.
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", windows))]
+pub fn die_with_parent(_: &mut std::process::Command) {
+    os::guard_children().expect("attach the test process and its future children to a Windows job");
+}
+
+#[cfg(all(feature = "gpu", unix))]
 pub fn die_with_parent(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
 

@@ -1074,7 +1074,12 @@ fn clock(at: SystemTime) -> String {
     // SAFETY: an all-zero tm is a valid value for localtime_r to fill.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: secs and tm are valid for the call, which fills tm.
-    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+    #[cfg(unix)]
+    let failed = unsafe { libc::localtime_r(&secs, &mut tm) }.is_null();
+    #[cfg(windows)]
+    // SAFETY: both tm and secs remain live during conversion.
+    let failed = unsafe { libc::localtime_s(&mut tm, &secs) } != 0;
+    if failed {
         return "--:--:--".to_owned();
     }
     format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)

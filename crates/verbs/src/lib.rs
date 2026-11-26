@@ -389,6 +389,7 @@ static LIB: OnceLock<Verbs> = OnceLock::new();
 ///
 /// `lib` is a live handle from `dlopen`, and `F` is an `unsafe extern "C"
 /// fn` type whose signature is `name`'s C prototype.
+#[cfg(unix)]
 unsafe fn entry<F: Copy>(lib: *mut c_void, name: &CStr) -> Result<F, VerbsError> {
     const { assert!(size_of::<F>() == size_of::<*mut c_void>()) };
     // SAFETY: `lib` is a live handle from dlopen (the caller's contract) and
@@ -414,6 +415,12 @@ impl Verbs {
         Ok(LIB.get_or_init(|| v))
     }
 
+    #[cfg(windows)]
+    fn open() -> Result<Verbs, VerbsError> {
+        Err("Linux RDMA verbs are unavailable on Windows".into())
+    }
+
+    #[cfg(unix)]
     fn open() -> Result<Verbs, VerbsError> {
         // SAFETY: the name is a NUL-terminated string; the library's
         // initializers are rdma-core's own.
