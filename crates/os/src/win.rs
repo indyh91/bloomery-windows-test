@@ -90,7 +90,9 @@ pub fn float_everywhere() -> Result<(), OsError> {
 }
 
 /// Physical cores (including SMT siblings) grouped by their shared L3 cache.
-pub fn cache_groups() -> Result<Vec<(Vec<Vec<u32>>, u64)>, OsError> {
+pub type CacheGroup = (Vec<Vec<u32>>, u64);
+
+pub fn cache_groups() -> Result<Vec<CacheGroup>, OsError> {
     process_mask()?;
     let mut len = 0;
     // SAFETY: a null buffer queries the required byte count.
@@ -146,7 +148,7 @@ pub fn cache_groups() -> Result<Vec<(Vec<Vec<u32>>, u64)>, OsError> {
 pub fn host_memory() -> Result<HostMemory, OsError> {
     let mut m = MEMORYSTATUSEX {
         dwLength: size_of::<MEMORYSTATUSEX>() as u32,
-        ..Default::default()
+        ..MEMORYSTATUSEX::default()
     };
     // SAFETY: initialized size and writable output.
     unsafe {
@@ -171,7 +173,7 @@ pub fn max_rss_bytes() -> Result<u64, OsError> {
     let n = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
     let mut m = PROCESS_MEMORY_COUNTERS {
         cb: n,
-        ..Default::default()
+        ..PROCESS_MEMORY_COUNTERS::default()
     };
     // SAFETY: the handle is current and the buffer is exactly n bytes.
     unsafe {
@@ -260,7 +262,7 @@ unsafe fn read_disk(
                     OffsetHigh: (offset >> 32) as u32,
                 },
             },
-            ..Default::default()
+            ..OVERLAPPED::default()
         };
         let mut read = 0;
         // SAFETY: this is a synchronous handle. The sub-slice, byte count and explicit
@@ -424,12 +426,12 @@ pub fn logical_cpu_count() -> u32 {
 /// # Safety
 /// The range belongs to a live mapping.
 pub unsafe fn prefetch(addr: *mut c_void, len: usize) -> Result<(), OsError> {
-    let mut range = WIN32_MEMORY_RANGE_ENTRY {
+    let range = WIN32_MEMORY_RANGE_ENTRY {
         VirtualAddress: addr,
         NumberOfBytes: len,
     };
     // SAFETY: the range is live and its descriptor stays in scope for the call.
-    unsafe { check(PrefetchVirtualMemory(GetCurrentProcess(), 1, &mut range, 0)) }
+    unsafe { check(PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0)) }
 }
 
 /// The owning process and every child it spawns join this job. The kernel closes the

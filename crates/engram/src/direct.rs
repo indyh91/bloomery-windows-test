@@ -201,23 +201,23 @@ impl AnonMap {
     /// Return the pages of `at .. at + len` — whole pages of the mapping —
     /// to the kernel: the next touch of the range reads zeroes.
     pub fn dontneed(&self, at: usize, len: usize) -> Result<(), EngramError> {
-        // SAFETY: the mapping is this value's own anonymous `MmapMut`, so
-        // DONTNEED frees the range's pages rather than dropping a file's,
-        // and `at .. at + len` names whole pages inside it (the caller carves
-        // the ranges it owns); nothing aliases the range through another
-        // view — the bytes are reached only through this mapping.
         #[cfg(windows)]
         {
-            return Err(EngramError::AnonMapAdvise {
+            Err(EngramError::AnonMapAdvise {
                 at,
                 len,
                 source: std::io::Error::new(
                     ErrorKind::Unsupported,
                     "anonymous mapped-page eviction on Windows",
                 ),
-            });
+            })
         }
         #[cfg(unix)]
+        // SAFETY: the mapping is this value's own anonymous `MmapMut`, so
+        // DONTNEED frees the range's pages rather than dropping a file's,
+        // and `at .. at + len` names whole pages inside it (the caller carves
+        // the ranges it owns); nothing aliases the range through another
+        // view — the bytes are reached only through this mapping.
         unsafe {
             self.0
                 .unchecked_advise_range(memmap2::UncheckedAdvice::DontNeed, at, len)
