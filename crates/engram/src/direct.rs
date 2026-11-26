@@ -227,20 +227,8 @@ fn check_span(direct: bool, ptr: usize, at: u64, len: usize) -> Result<(), ()> {
 /// never written reads in place.
 #[cfg(windows)]
 fn read_all(file: &File, dst: &mut [MaybeUninit<u8>], at: u64) -> Result<usize, std::io::Error> {
-    use std::os::windows::fs::FileExt;
-    dst.fill(MaybeUninit::new(0));
-    // SAFETY: every byte was initialized above; the resulting slice has the same lifetime.
-    let dst = unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u8>(), dst.len()) };
-    let mut got = 0;
-    while got < dst.len() {
-        let offset = at.checked_add(got as u64).ok_or(ErrorKind::InvalidInput)?;
-        let n = file.seek_read(&mut dst[got..], offset)?;
-        if n == 0 {
-            break;
-        }
-        got += n;
-    }
-    Ok(got)
+    // SAFETY: DirectFile opens ordinary synchronous disk handles in both buffered and direct mode.
+    unsafe { os::read_sync_at(file, dst, at) }
 }
 
 #[cfg(unix)]

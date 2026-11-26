@@ -198,6 +198,64 @@ pub fn open_direct(path: &Path) -> Result<File, OsError> {
         .custom_flags(FILE_FLAG_NO_BUFFERING)
         .open(path)?)
 }
+/// Read a local disk file into its caller's buffer, including an unbuffered file's short final sector.
+/// The remaining bytes retain their original contents.
+///
+/// # Safety
+/// The handle must be synchronous (opened without FILE_FLAG_OVERLAPPED).
+pub unsafe fn read_sync_at(
+    file: &File,
+    dst: &mut [std::mem::MaybeUninit<u8>],
+    at: u64,
+) -> io::Result<usize> {
+    use windows_sys::Win32::{
+        Foundation::ERROR_HANDLE_EOF,
+        System::IO::{OVERLAPPED, OVERLAPPED_0, OVERLAPPED_0_0},
+    };
+
+    let mut got = 0;
+    while got < dst.len() {
+        let offset = at.checked_add(got as u64).ok_or(ErrorKind::InvalidInput)?;
+        // ReadFile takes a DWORD. Keep the offset and buffer of each subsequent call sector-aligned.
+        let count = (dst.len() - got).min(0x7fff_f000) as u32;
+        let mut position = OVERLAPPED {
+            Anonymous: OVERLAPPED_0 {
+                Anonymous: OVERLAPPED_0_0 {
+                    Offset: offset as u32,
+                    OffsetHigh: (offset >> 32) as u32,
+                },
+            },
+            ..Default::default()
+        };
+        let mut read = 0;
+        // SAFETY: this is a synchronous handle. The sub-slice, byte count and explicit
+        // file position stay valid through completion. ReadFile initializes the returned prefix.
+        let ok = unsafe {
+            ReadFile(
+                file.as_raw_handle(),
+                dst[got..].as_mut_ptr().cast(),
+                count,
+                &mut read,
+                &mut position,
+            )
+        };
+        if ok == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
+                break;
+            }
+            return Err(error);
+        }
+        got += read as usize;
+        // A regular disk file returns its remaining bytes at EOF. Another unbuffered read
+        // starting at a partial sector would fail with ERROR_INVALID_PARAMETER.
+        if read < count {
+            break;
+        }
+    }
+    Ok(got)
+}
+
 pub fn rename_noreplace(from: &Path, to: &Path) -> Result<(), OsError> {
     let (from, to) = (wide(from)?, wide(to)?);
     // SAFETY: both paths are nul-terminated; flags exclude replacing an existing file.

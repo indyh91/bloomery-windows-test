@@ -79,3 +79,29 @@ fn mapped_pages_populate_lock_and_report_residency() {
     drop(quota);
     assert_eq!(residency, [1, 1]);
 }
+
+#[test]
+fn unbuffered_final_sector_preserves_the_unread_tail() {
+    use std::mem::MaybeUninit;
+    let path = std::env::temp_dir().join(format!("bloomery-unaligned-eof-{}", std::process::id()));
+    let sector = 4096;
+    let mut input = vec![0_u8; sector + 17];
+    input[sector..].fill(23);
+    fs::write(&path, &input).unwrap();
+    let file = os::open_direct(&path).unwrap();
+    let mut storage = vec![MaybeUninit::new(91); 2 * sector];
+    let offset = storage.as_ptr().align_offset(sector);
+    let span = &mut storage[offset..offset + sector];
+    // SAFETY: open_direct returns a synchronous file. Every byte of span was initialized above.
+    unsafe {
+        assert_eq!(os::read_sync_at(&file, span, sector as u64).unwrap(), 17);
+        assert!(span[..17].iter().all(|b| b.assume_init() == 23));
+        assert!(span[17..].iter().all(|b| b.assume_init() == 91));
+        assert_eq!(
+            os::read_sync_at(&file, span, (2 * sector) as u64).unwrap(),
+            0
+        );
+    }
+    drop(file);
+    fs::remove_file(path).unwrap();
+}
