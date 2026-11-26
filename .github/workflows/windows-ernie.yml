@@ -13,6 +13,21 @@ jobs:
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
+      - name: Exercise Win32 services and the ERNIE protocol with the vendor tokenizer
+        shell: powershell
+        run: |
+          $env:RUSTUP_TOOLCHAIN = (Select-String -Path rust-toolchain.toml -Pattern 'channel = "([^"]+)"').Matches.Groups[1].Value
+          rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:BLOOMERY_REF_MODEL = Join-Path $env:RUNNER_TEMP 'ernie-tokenizer'
+          New-Item -ItemType Directory -Force $env:BLOOMERY_REF_MODEL | Out-Null
+          $vocab = Join-Path $env:BLOOMERY_REF_MODEL 'tokenizer.json'
+          curl.exe --retry 3 -fsSL 'https://huggingface.co/baidu/ERNIE-5.5-Flash-Preview/resolve/ace1100dcde7bf4eb06add6ae11ce4f43a11ddfe/tokenizer.json' -o $vocab
+          if ($LASTEXITCODE -or (Get-FileHash $vocab).Hash -ne '20e7c81f36fdfb90db664583fc6426d5c2ac6d6bcaf631c910941a8d8f30f2d9') { throw 'Tokenizer download or hash failed' }
+          cargo test --locked -p bloomery-os --target x86_64-pc-windows-msvc --lib --test windows
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p bloomery-serve --test ernie55 --target x86_64-pc-windows-msvc -- --include-ignored
+          exit $LASTEXITCODE
       - name: Fetch pinned CUDA and LLVM build inputs
         shell: pwsh
         run: python tools/windows/ci_toolchain.py "$env:RUNNER_TEMP\ernie-sdk"
@@ -20,8 +35,6 @@ jobs:
         shell: powershell
         run: |
           .\tools\windows\Build-ERNIE.ps1
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo test --locked -p bloomery-os --test windows --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $exe = '.\target\x86_64-pc-windows-msvc\release\bloomery-serve.exe'
           & $exe --help

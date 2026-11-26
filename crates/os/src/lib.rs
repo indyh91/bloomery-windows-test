@@ -1193,6 +1193,7 @@ mod tests {
 
     /// The page cache drops the clean pages of a file; the platform with no
     /// `posix_fadvise` refuses the drop by name.
+    #[cfg(unix)]
     #[test]
     fn the_page_cache_drops_a_files_clean_pages() {
         let p = scratch("fadvise");
@@ -1225,6 +1226,7 @@ mod tests {
     }
 
     /// A file's bytes are written out.
+    #[cfg(unix)]
     #[test]
     fn a_files_bytes_are_written_out() {
         let p = scratch("sync");
@@ -1448,7 +1450,15 @@ mod tests {
         assert_eq!(super::rss_bytes(2048), 2_097_152);
         #[cfg(target_os = "macos")]
         assert_eq!(super::rss_bytes(2048), 2048);
-        let children = super::children_max_rss_bytes().expect("the children's peak reads");
-        assert!(children <= total, "the children's peak is {children} B");
+        #[cfg(unix)]
+        {
+            let children = super::children_max_rss_bytes().expect("the children's peak reads");
+            assert!(children <= total, "the children's peak is {children} B");
+        }
+        #[cfg(windows)]
+        assert!(matches!(
+            super::children_max_rss_bytes(),
+            Err(OsError::Unsupported { .. })
+        ));
     }
 }

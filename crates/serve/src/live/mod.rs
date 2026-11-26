@@ -356,7 +356,7 @@ impl Live {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd};

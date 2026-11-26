@@ -42,12 +42,14 @@ try {
     if (!$env:LIBCLANG_PATH) { $env:LIBCLANG_PATH = $llvmBin }
     $env:Path = "$llvmBin;$env:LIBCLANG_PATH;$env:CUDA_TOOLKIT_PATH\bin\x64;$env:CUDA_TOOLKIT_PATH\bin;$env:Path"
     if (!$env:LIBFFI_LIB_DIR) {
-        $vcpkg = if ($env:VCPKG_ROOT) { Join-Path $env:VCPKG_ROOT 'vcpkg.exe' } else { (Get-Command vcpkg.exe -ErrorAction Stop).Source }
+        $roots = @($env:VCPKG_INSTALLATION_ROOT, $env:VCPKG_ROOT) | Where-Object { $_ }
+        $vcpkg = $roots | ForEach-Object { Join-Path $_ 'vcpkg.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (!$vcpkg) { $vcpkg = (Get-Command vcpkg.exe -ErrorAction Stop).Source }
         $env:VCPKG_ROOT = Split-Path $vcpkg
-        if (!(Test-Path "$env:VCPKG_ROOT\installed\x64-windows\lib\ffi.lib")) {
-            Invoke-Checked $vcpkg @('install', 'libffi:x64-windows', '--classic')
-        }
-        $env:LIBFFI_LIB_DIR = "$env:VCPKG_ROOT\installed\x64-windows\lib"
+        $manifest = Join-Path $repo 'tools\windows'
+        $installed = Join-Path $repo 'target\windows-tools\vcpkg'
+        Invoke-Checked $vcpkg @('install', "--x-manifest-root=$manifest", "--x-install-root=$installed", '--triplet=x64-windows')
+        $env:LIBFFI_LIB_DIR = Join-Path $installed 'x64-windows\lib'
     }
     $env:Path = "$(Split-Path $env:LIBFFI_LIB_DIR)\bin;$env:Path"
     $channel = [regex]::Match((Get-Content rust-toolchain.toml -Raw), 'channel\s*=\s*"([^"]+)"').Groups[1].Value
