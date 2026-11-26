@@ -196,6 +196,15 @@ pub trait Family: Sized + 'static {
     /// The file's plan inputs, its own reading.
     fn read(split: &Split) -> Result<PlanInputs<Self::H>, PlacementError>;
 
+    /// Resolve a checkpoint to the layout this family's host loader can use.
+    #[cfg(all(windows, feature = "checkpoint"))]
+    fn prepare_path(
+        path: std::path::PathBuf,
+        _plan_only: bool,
+    ) -> Result<std::path::PathBuf, GateError> {
+        Ok(path)
+    }
+
     /// The model at `path` ([`Tiered::read_model`]): by default a GGUF split, a directory refused
     /// by name ([`tiered::read_split`]); a family whose body reads a checkpoint folder opens it
     /// here, once, and the seat loads it from its header and part source.
@@ -857,6 +866,14 @@ impl<F: Family> Tiered for Hybrid<F> {
 
     fn read(split: &Split) -> Result<PlanInputs<F::H>, PlacementError> {
         F::read(split)
+    }
+
+    #[cfg(all(windows, feature = "checkpoint"))]
+    fn prepare_path(
+        path: std::path::PathBuf,
+        plan_only: bool,
+    ) -> Result<std::path::PathBuf, GateError> {
+        F::prepare_path(path, plan_only)
     }
 
     fn read_model(path: &Path) -> Result<tiered::Read, GateError> {
