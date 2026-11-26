@@ -1,6 +1,14 @@
 {
   "name": "bloomery-windows-codegen",
   "version-string": "1",
-  "builtin-baseline": "9fa95bf687fa6ae7f2da0673a8067e5fc1515c27",
-  "dependencies": ["libffi"]
+  "dependencies": [
+    "libffi"
+  ],
+  "vcpkg-configuration": {
+    "default-registry": {
+      "kind": "git",
+      "repository": "https://github.com/microsoft/vcpkg",
+      "baseline": "9fa95bf687fa6ae7f2da0673a8067e5fc1515c27"
+    }
+  }
 }
