@@ -13,7 +13,6 @@
 
 pub mod arch;
 pub mod dspark_fixture;
-pub mod ernie_cache;
 pub mod folder;
 pub mod follow;
 pub mod model_file;

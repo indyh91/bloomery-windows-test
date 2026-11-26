@@ -716,7 +716,7 @@ fn native_ernie_cache_round_trip() {
     let folder = work.join("vendor folder");
     let cache = work.join("packed model");
     write_toy_folder(&folder);
-    let resolve = |plan| model_hf::ernie_cache::resolve(&folder, Some(&cache), plan);
+    let resolve = |plan| model_hf::arch::ernie55::cache::resolve(&folder, Some(&cache), plan);
     assert_eq!(resolve(true).unwrap(), folder.canonicalize().unwrap());
     assert!(!cache.exists());
     let picked = resolve(false).unwrap();

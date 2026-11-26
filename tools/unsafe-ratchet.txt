@@ -43,7 +43,9 @@ embed 0 0 0
 # table's runs (a checkpoint folder's shards) read-only with memmap2's map, one block with its SAFETY line.
 # PIN(2026-10-23): engram 11 -> 12 blocks, 0 -> 1 fns, new test-only syscall recorder forwards
 # whole pages of a read-only file mapping to libc::madvise, one block with its SAFETY line.
-engram 12 1 0
+# PIN(2026-11-27): the Windows positioned reader passes a synchronous file and a borrowed buffer to Win32.
+# Both DirectFile constructors establish the contract documented at the call.
+engram 13 1 0
 engram-lab 0 0 0
 gguf 7 2 0
 # PIN(2026-10-01): gpu 1354 -> 1356, a new kernel entry, not old code relaxed: kda_delta_lanes (GLM's two-row
@@ -1194,7 +1196,10 @@ models 0 0 0
 # (madvise(MADV_HUGEPAGE), its Linux and macOS bodies) and its test, each with its SAFETY line.
 # PIN(2026-10-25): os 32 -> 33 blocks, code moved in, not old code relaxed: advise_huge_within (moved from gpu's
 # host_filled advice, gpu comes down by the one that moved), with its SAFETY line.
-os 33 7 0
+# PIN(2026-11-27): win.rs and its Windows tests add the Win32 affinity, cache topology, file I/O,
+# memory status, residency and working-set calls needed by the native host. Their SAFETY comments cover
+# handle lifetimes, initialized lengths, disk-sector alignment and the lifetime of locked mappings.
+os 61 14 0
 placement 0 0 0
 # PIN(2026-10-02): qdot 69 -> 77 blocks, 36 -> 41 fns, new kernels, not old code relaxed: the Q4_K/Q5_K row
 # lanes (pack_lanes_avx2, dot_lanes_avx2 and their helpers transpose8_epi32, transpose8_ps, lane_codes: five
@@ -1328,7 +1333,9 @@ sampler 4 4 1
 # PIN(2026-10-29): serve 54 -> 56 blocks, 0 -> 2 fns, 0 -> 1 impl, new test code: tests/callstream.rs counts the
 # bytes a streamed Qwen argument allocates through a global allocator that delegates to the system one (the impl, its
 # alloc and dealloc, one block each), each with its SAFETY line.
-serve 56 2 1
+# PIN(2026-11-27): the native console and shutdown handler use Windows console handles, event unions
+# and a control callback. Their SAFETY comments cover the active union member and handle ownership.
+serve 73 3 1
 threads 3 0 1
 tokenizer 0 0 0
 # PIN(2026-10-14): verbs 0 -> 57 blocks, 22 fns, 2 impls, new crate, moved from gpu-gates/src/bin/shared/verbs.rs (45

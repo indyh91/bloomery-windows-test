@@ -24,6 +24,8 @@
 //! ([`Checkpoint::parse`]): every config key is read into a header key, fixed to the value the
 //! program assumes (a folder of another value is refused by name) or ignored with its reason.
 
+pub mod cache;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use gguf::arch::ernie55::ARCH as ARCHITECTURE;

@@ -339,6 +339,12 @@ pub trait Tiered: Seat + Sized + 'static {
     /// Whether `arch` is a file this seat serves.
     fn accepts(arch: Arch) -> bool;
 
+    /// Prepare a checkpoint whose on-disk tensor layout needs a resident host representation.
+    #[cfg(all(windows, feature = "checkpoint"))]
+    fn prepare_path(path: PathBuf, _plan_only: bool) -> Result<PathBuf, GateError> {
+        Ok(path)
+    }
+
     /// The model at `path`. The default is a GGUF split and refuses a directory by name
     /// ([`read_split`]); a seat that reads a checkpoint folder overrides it, opening the folder
     /// once ([`Read`]).
@@ -841,12 +847,7 @@ pub fn run<S: Tiered>(args: &[String], side: &side_seat::Flags) -> Result<ServeE
     let side = side.read()?;
     let path = ref_model_path()?;
     #[cfg(all(windows, feature = "checkpoint"))]
-    let path = if S::FAMILY == "ernie55" && path.is_dir() {
-        let cache = std::env::var_os("ERNIE_GGUF_CACHE").map(PathBuf::from);
-        model_hf::ernie_cache::resolve(&path, cache.as_deref(), a.plan_only)?
-    } else {
-        path
-    };
+    let path = S::prepare_path(path, a.plan_only)?;
     let Read {
         split,
         mut tokenizer,

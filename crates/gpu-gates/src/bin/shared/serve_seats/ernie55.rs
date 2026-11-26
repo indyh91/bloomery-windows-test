@@ -89,6 +89,18 @@ impl Family for Ernie55 {
     /// The server's port of the vendor's renderer: a folder carries no template.
     const TEMPLATE: Option<&'static str> = Some(serve::ernie::TEMPLATE);
 
+    #[cfg(all(windows, feature = "checkpoint"))]
+    fn prepare_path(
+        path: std::path::PathBuf,
+        plan_only: bool,
+    ) -> Result<std::path::PathBuf, GateError> {
+        if !path.is_dir() {
+            return Ok(path);
+        }
+        let cache = std::env::var_os("ERNIE_GGUF_CACHE").map(std::path::PathBuf::from);
+        model_hf::arch::ernie55::cache::resolve(&path, cache.as_deref(), plan_only)
+    }
+
     /// A checkpoint folder of an `ernie5_5` model ([`super::folder::open`]): its located header,
     /// tokenizer and part source; a path that is not a directory is a GGUF split.
     fn read_model(path: &Path) -> Result<Read, GateError> {
