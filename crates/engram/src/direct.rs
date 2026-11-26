@@ -46,6 +46,8 @@ pub fn open_direct(path: &Path) -> Result<File, EngramError> {
 pub struct DirectFile {
     path: PathBuf,
     file: File,
+    #[cfg(windows)]
+    file_len: u64,
     /// Whether the descriptor carries `O_DIRECT`, for the readers a caller
     /// counts by mode.
     direct: bool,
@@ -57,19 +59,17 @@ impl DirectFile {
     /// `EINVAL` there (a filesystem without direct IO) is a named refusal
     /// with the path and the errno, not a read that fails later at a fill.
     pub fn open(path: &Path) -> Result<DirectFile, EngramError> {
-        let file = open_direct(path)?;
+        let reader = Self::from_file(path, open_direct(path)?, true)?;
         let mut probe = vec![MaybeUninit::<u8>::uninit(); 2 * DIRECT_ALIGN];
         let off = probe.as_ptr().align_offset(DIRECT_ALIGN);
         let buf = &mut probe[off..off + DIRECT_ALIGN];
-        read_all(&file, buf, 0).map_err(|source| EngramError::DirectProbe {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        Ok(DirectFile {
-            path: path.to_path_buf(),
-            file,
-            direct: true,
-        })
+        reader
+            .read_bytes(buf, 0)
+            .map_err(|source| EngramError::DirectProbe {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        Ok(reader)
     }
 
     /// `path` opened for reads the page cache serves: the same
@@ -81,11 +81,33 @@ impl DirectFile {
             path: path.to_path_buf(),
             source,
         })?;
-        Ok(DirectFile {
+        Self::from_file(path, file, false)
+    }
+
+    fn from_file(path: &Path, file: File, direct: bool) -> Result<Self, EngramError> {
+        Ok(Self {
             path: path.to_path_buf(),
+            #[cfg(windows)]
+            file_len: file
+                .metadata()
+                .map_err(|source| EngramError::OpenDirect {
+                    path: path.to_path_buf(),
+                    source,
+                })?
+                .len(),
             file,
-            direct: false,
+            direct,
         })
+    }
+
+    fn read_bytes(&self, dst: &mut [MaybeUninit<u8>], at: u64) -> std::io::Result<usize> {
+        #[cfg(windows)]
+        // SAFETY: both constructors open synchronous disk handles. Checkpoint shards are immutable.
+        unsafe {
+            os::read_sync_at(&self.file, dst, at, self.file_len, self.direct)
+        }
+        #[cfg(unix)]
+        read_all(&self.file, dst, at)
     }
 
     /// The file's path, for the refusals a caller names.
@@ -128,12 +150,13 @@ impl DirectFile {
                 len: dst.len(),
             }
         })?;
-        read_all(&self.file, dst, at).map_err(|source| EngramError::DirectRead {
-            path: self.path.clone(),
-            at,
-            len: dst.len(),
-            source,
-        })
+        self.read_bytes(dst, at)
+            .map_err(|source| EngramError::DirectRead {
+                path: self.path.clone(),
+                at,
+                len: dst.len(),
+                source,
+            })
     }
 }
 
@@ -225,12 +248,6 @@ fn check_span(direct: bool, ptr: usize, at: u64, len: usize) -> Result<(), ()> {
 /// asked only when the file ends first. Every other failure names its errno
 /// to the caller. `pread` writes into the buffer as it stands, so a buffer
 /// never written reads in place.
-#[cfg(windows)]
-fn read_all(file: &File, dst: &mut [MaybeUninit<u8>], at: u64) -> Result<usize, std::io::Error> {
-    // SAFETY: DirectFile opens ordinary synchronous disk handles in both buffered and direct mode.
-    unsafe { os::read_sync_at(file, dst, at) }
-}
-
 #[cfg(unix)]
 fn read_all(file: &File, dst: &mut [MaybeUninit<u8>], at: u64) -> Result<usize, std::io::Error> {
     let mut got = 0usize;

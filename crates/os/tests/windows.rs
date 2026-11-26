@@ -94,11 +94,14 @@ fn unbuffered_final_sector_preserves_the_unread_tail() {
     let span = &mut storage[offset..offset + sector];
     // SAFETY: open_direct returns a synchronous file. Every byte of span was initialized above.
     unsafe {
-        assert_eq!(os::read_sync_at(&file, span, sector as u64).unwrap(), 17);
+        assert_eq!(
+            os::read_sync_at(&file, span, sector as u64, input.len() as u64, true).unwrap(),
+            17
+        );
         assert!(span[..17].iter().all(|b| b.assume_init() == 23));
         assert!(span[17..].iter().all(|b| b.assume_init() == 91));
         assert_eq!(
-            os::read_sync_at(&file, span, (2 * sector) as u64).unwrap(),
+            os::read_sync_at(&file, span, (2 * sector) as u64, input.len() as u64, true).unwrap(),
             0
         );
     }

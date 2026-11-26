@@ -202,8 +202,43 @@ pub fn open_direct(path: &Path) -> Result<File, OsError> {
 /// The remaining bytes retain their original contents.
 ///
 /// # Safety
-/// The handle must be synchronous (opened without FILE_FLAG_OVERLAPPED).
+/// The handle must be synchronous (opened without FILE_FLAG_OVERLAPPED). The file must
+/// keep its length for this call. Unbuffered reads take a 4-KiB-aligned address, offset and length.
 pub unsafe fn read_sync_at(
+    file: &File,
+    dst: &mut [std::mem::MaybeUninit<u8>],
+    at: u64,
+    file_len: u64,
+    unbuffered: bool,
+) -> io::Result<usize> {
+    const SECTOR: usize = 4096;
+    #[repr(align(4096))]
+    struct Sector([std::mem::MaybeUninit<u8>; SECTOR]);
+
+    let available = usize::try_from(file_len.saturating_sub(at)).unwrap_or(usize::MAX);
+    let count = dst.len().min(available);
+    let direct_tail = unbuffered && count < dst.len() && !count.is_multiple_of(SECTOR);
+    let prefix = if direct_tail {
+        count / SECTOR * SECTOR
+    } else {
+        count
+    };
+    // SAFETY: synchronous file and valid destination. Any unbuffered prefix comprises whole sectors.
+    let got = unsafe { read_disk(file, &mut dst[..prefix], at)? };
+    if got < prefix || !direct_tail {
+        return Ok(got);
+    }
+    // NTFS can zero the rest of the physical sector even when it reports a short read.
+    // Isolate that sector so only actual file bytes reach the caller's tail.
+    let mut last = Sector([std::mem::MaybeUninit::uninit(); SECTOR]);
+    let offset = at.checked_add(got as u64).ok_or(ErrorKind::InvalidInput)?;
+    // SAFETY: last is sector-aligned and stays valid until this synchronous call returns.
+    let tail = unsafe { read_disk(file, &mut last.0, offset)? }.min(count - got);
+    dst[got..got + tail].copy_from_slice(&last.0[..tail]);
+    Ok(got + tail)
+}
+
+unsafe fn read_disk(
     file: &File,
     dst: &mut [std::mem::MaybeUninit<u8>],
     at: u64,
