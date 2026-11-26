@@ -707,3 +707,39 @@ fn without_split(keys: &[(String, gguf::Value)]) -> Vec<(String, gguf::Value)> {
         .cloned()
         .collect()
 }
+
+/// The native serving path must preserve the folder loader's bytes, reuse its cache,
+/// and detect a checkpoint changed since preparation.
+#[test]
+fn native_ernie_cache_round_trip() {
+    let work = work_dir("native-cache");
+    let folder = work.join("vendor folder");
+    let cache = work.join("packed model");
+    write_toy_folder(&folder);
+    let resolve = |plan| model_hf::ernie_cache::resolve(&folder, Some(&cache), plan);
+    assert_eq!(resolve(true).unwrap(), folder.canonicalize().unwrap());
+    assert!(!cache.exists());
+    let picked = resolve(false).unwrap();
+    assert!(lossless(&folder, &picked) > 0);
+    let before = std::fs::metadata(&picked).unwrap().modified().unwrap();
+    assert_eq!(resolve(false).unwrap(), picked);
+    assert_eq!(
+        std::fs::metadata(&picked).unwrap().modified().unwrap(),
+        before
+    );
+    assert_eq!(resolve(true).unwrap(), picked);
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(folder.join("config.json"))
+        .unwrap();
+    f.write_all(b" ").unwrap();
+    drop(f);
+    assert!(
+        resolve(false)
+            .unwrap_err()
+            .to_string()
+            .contains("changed checkpoint")
+    );
+    std::fs::remove_dir_all(work).unwrap();
+}

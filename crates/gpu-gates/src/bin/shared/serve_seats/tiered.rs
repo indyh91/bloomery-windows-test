@@ -840,6 +840,13 @@ pub fn run<S: Tiered>(args: &[String], side: &side_seat::Flags) -> Result<ServeE
     let (a, mut flags) = a;
     let side = side.read()?;
     let path = ref_model_path()?;
+    #[cfg(all(windows, feature = "checkpoint"))]
+    let path = if S::FAMILY == "ernie55" && path.is_dir() {
+        let cache = std::env::var_os("ERNIE_GGUF_CACHE").map(PathBuf::from);
+        model_hf::ernie_cache::resolve(&path, cache.as_deref(), a.plan_only)?
+    } else {
+        path
+    };
     let Read {
         split,
         mut tokenizer,

@@ -56,7 +56,10 @@ try {
     $rev = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^cuda-device = .*rev = "([0-9a-f]{40})"').Groups[1].Value
     if (!$channel -or !$rev) { throw 'Missing pinned Rust channel or CUDA-Oxide revision.' }
     $env:RUSTUP_TOOLCHAIN = "$channel-x86_64-pc-windows-msvc"
-    Invoke-Checked 'rustup' @('toolchain','install',$env:RUSTUP_TOOLCHAIN,'--profile','minimal','--component','rust-src,rustc-dev,llvm-tools')
+    Invoke-Checked 'rustup' @('toolchain','install',$env:RUSTUP_TOOLCHAIN,'--profile','minimal','--component','rust-src,rustc-dev,llvm-tools,rustfmt')
+    # The pinned CUDA bindings normalize Win32 enum signedness after bindgen formats its output.
+    $env:RUSTFMT = (& rustup which --toolchain $env:RUSTUP_TOOLCHAIN rustfmt)
+    Invoke-Checked $env:RUSTFMT @('--version')
     $env:RUSTC_BOOTSTRAP = '1'
     $install = Join-Path $repo "target\windows-tools\$rev"
     $oxide = Join-Path $install 'bin\cargo-oxide.exe'

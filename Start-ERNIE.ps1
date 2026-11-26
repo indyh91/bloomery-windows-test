@@ -5,6 +5,7 @@ param(
     [ValidateRange(1,65535)][int]$Port = 8091,
     [ValidateRange(0,255)][int]$Gpu,
     [string]$Binary,
+    [string]$CacheDirectory,
     [switch]$Plan
 )
 $ErrorActionPreference = 'Stop'
@@ -32,6 +33,7 @@ $vars = @{
     BLOOMERY_HOST_POPULATE = '1'
     BLOOMERY_HOST_LOCK = '1'
 }
+if ($CacheDirectory) { $vars['ERNIE_GGUF_CACHE'] = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CacheDirectory) }
 $old = @{}
 foreach ($key in $vars.Keys) { $old[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 try {

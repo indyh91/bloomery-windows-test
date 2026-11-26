@@ -27,6 +27,8 @@ jobs:
           cargo test --locked -p bloomery-os --target x86_64-pc-windows-msvc --lib --test windows
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked -p bloomery-serve --test ernie55 --target x86_64-pc-windows-msvc -- --include-ignored
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked -p bloomery-model-hf --test ernie55_quantize --target x86_64-pc-windows-msvc native_ernie_cache_round_trip
           exit $LASTEXITCODE
   build:
     runs-on: windows-2022

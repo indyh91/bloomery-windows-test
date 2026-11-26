@@ -1490,6 +1490,12 @@ fn host_pages(
                     }
                     (sg.data_base() + side_info.offset, &mut side)
                 }
+                None if split.place(&t.name) == Some(&gguf::Place::Made) => {
+                    return Err(PlacementError::tensor(
+                        t,
+                        "has no file range for its CPU expert pages; use the lossless GGUF",
+                    ));
+                }
                 None => (g.data_base() + info.offset, &mut pages[s]),
             };
             let (a, b) = (base + span.bytes.start, base + span.bytes.end);
