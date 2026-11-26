@@ -549,7 +549,7 @@ impl Branch {
                         deps.cast_mut(),
                         data,
                         n,
-                        sys::CUstreamUpdateCaptureDependencies_flags_enum_CU_STREAM_SET_CAPTURE_DEPENDENCIES as u32,
+                        stream_flag(sys::CUstreamUpdateCaptureDependencies_flags_enum_CU_STREAM_SET_CAPTURE_DEPENDENCIES),
                     )
                 };
                 cu(rc, "cuStreamUpdateCaptureDependencies_v2")?;
@@ -948,6 +948,17 @@ pub(crate) const SHARED_PAGE: usize = 1 << 16;
 
 // ------------------------------------------------------ stream memory ops
 
+/// The driver takes unsigned stream flag bits. MSVC headers give these C enums a signed
+/// underlying type, while Unix headers use an unsigned type.
+#[cfg(windows)]
+const fn stream_flag(bits: i32) -> u32 {
+    bits.cast_unsigned()
+}
+#[cfg(not(windows))]
+const fn stream_flag(bits: u32) -> u32 {
+    bits
+}
+
 /// An all-zero batch operation.
 fn op_zero() -> sys::CUstreamBatchMemOpParams {
     // SAFETY: every member of the union is a plain C struct of integers, so
@@ -966,7 +977,7 @@ pub fn op_wait_geq(addr: sys::CUdeviceptr, value: u32) -> sys::CUstreamBatchMemO
             sys::CUstreamBatchMemOpParams_union_CUstreamMemOpWaitValueParams_st__bindgen_ty_1 {
                 value,
             },
-        flags: sys::CUstreamWaitValue_flags_enum_CU_STREAM_WAIT_VALUE_GEQ as u32,
+        flags: stream_flag(sys::CUstreamWaitValue_flags_enum_CU_STREAM_WAIT_VALUE_GEQ),
         alias: 0,
     };
     p
@@ -982,7 +993,7 @@ pub fn op_write(addr: sys::CUdeviceptr, value: u32) -> sys::CUstreamBatchMemOpPa
             sys::CUstreamBatchMemOpParams_union_CUstreamMemOpWriteValueParams_st__bindgen_ty_1 {
                 value,
             },
-        flags: sys::CUstreamWriteValue_flags_enum_CU_STREAM_WRITE_VALUE_DEFAULT as u32,
+        flags: stream_flag(sys::CUstreamWriteValue_flags_enum_CU_STREAM_WRITE_VALUE_DEFAULT),
         alias: 0,
     };
     p
@@ -994,7 +1005,7 @@ pub fn op_barrier_sys() -> sys::CUstreamBatchMemOpParams {
     let mut p = op_zero();
     p.memoryBarrier = sys::CUstreamBatchMemOpParams_union_CUstreamMemOpMemoryBarrierParams_st {
         operation: sys::CUstreamBatchMemOpType_enum_CU_STREAM_MEM_OP_BARRIER,
-        flags: sys::CUstreamMemoryBarrier_flags_enum_CU_STREAM_MEMORY_BARRIER_TYPE_SYS as u32,
+        flags: stream_flag(sys::CUstreamMemoryBarrier_flags_enum_CU_STREAM_MEMORY_BARRIER_TYPE_SYS),
     };
     p
 }
