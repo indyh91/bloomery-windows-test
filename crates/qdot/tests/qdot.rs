@@ -9294,3 +9294,42 @@ fn nvfp4_codes_to_blocks_follows_the_value_rule() {
     );
     assert!(dst.iter().all(|&b| b == 0xA5), "a refusal wrote into dst");
 }
+
+/// Exercise the selected MXFP4 dispatch against the explicitly AVX2 and scalar
+/// bodies, including every tail length and column width. No model files needed.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn mxfp4_dispatch_bit_parity() {
+    if !std::arch::is_x86_feature_detected!("avx2")
+        || !std::arch::is_x86_feature_detected!("fma")
+    {
+        eprintln!("MXFP4 parity skipped: AVX2/FMA unavailable");
+        return;
+    }
+    eprintln!("MXFP4 VNNI active: {}", qdot::mxfp4_vnni());
+    let ty = GgmlType::MXFP4;
+    let mut rng = Lcg(0x7543_2167);
+    for k in [32, 64, 96, 128, 160, 192, 224, 736, 2048, 4096] {
+        let nb = k / 32;
+        let cols = legacy_tile_columns(ty, k, vec![]);
+        for _ in 0..16 {
+            let mut row = Vec::with_capacity(nb * 17);
+            for _ in 0..nb {
+                let e = 112 + (rng.next_u32() % 32) as u8;
+                let codes: [u8; 16] = std::array::from_fn(|_| (rng.next_u32() >> 7) as u8);
+                row.extend_from_slice(&mxfp4_block(e, |i| codes[i]));
+            }
+            for c in 1..=qdot::TILE_COLS {
+                let acols: Vec<&[u8]> = cols[..c].iter().map(Vec::as_slice).collect();
+                let mut out = vec![f32::NAN; c];
+                qdot::dot_row_cols(ty, &row, &acols, k, &mut out).unwrap();
+                for (got, a) in out.iter().zip(acols) {
+                    let old = dot_row_avx2(ty, &row, a, k).unwrap();
+                    let mirror = dot_row_scalar(ty, &row, a, k).unwrap();
+                    assert_eq!(got.to_bits(), old.to_bits(), "k={k}, columns={c}");
+                    assert_eq!(got.to_bits(), mirror.to_bits(), "k={k}, columns={c}");
+                }
+            }
+        }
+    }
+}

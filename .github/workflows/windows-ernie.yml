@@ -1,7 +1,7 @@
 name: Windows ERNIE SM86
 on:
   push:
-    branches: [main, native-windows-ernie]
+    branches: [main, native-windows-ernie, windows-ernie-mxfp4-perf]
   workflow_dispatch:
 
 permissions:
@@ -28,6 +28,12 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked -p bloomery-serve --test ernie55 --target x86_64-pc-windows-msvc -- --include-ignored
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          foreach ($arm in @('0','1')) {
+            $env:BLOOMERY_QDOT_AVX512 = $arm
+            cargo test --locked --release -p bloomery-qdot --test qdot --target x86_64-pc-windows-msvc mxfp4_dispatch_bit_parity -- --nocapture
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          Remove-Item Env:BLOOMERY_QDOT_AVX512
           cargo test --locked -p bloomery-model-hf --test ernie55_quantize --target x86_64-pc-windows-msvc native_ernie_cache_round_trip
           exit $LASTEXITCODE
   build:
