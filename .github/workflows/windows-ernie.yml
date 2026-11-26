@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  windows-tests:
     runs-on: windows-2022
-    timeout-minutes: 100
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: Exercise Win32 services and the ERNIE protocol with the vendor tokenizer
@@ -28,6 +28,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked -p bloomery-serve --test ernie55 --target x86_64-pc-windows-msvc -- --include-ignored
           exit $LASTEXITCODE
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
       - name: Fetch pinned CUDA and LLVM build inputs
         shell: pwsh
         run: python tools/windows/ci_toolchain.py "$env:RUNNER_TEMP\ernie-sdk"

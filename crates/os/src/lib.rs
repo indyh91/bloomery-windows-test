@@ -48,7 +48,7 @@ impl OsError {
     fn is_no_advice(&self) -> bool {
         match self {
             Self::Unsupported { .. } => true,
-            Self::Io(e) => e.raw_os_error() == Some(libc::EINVAL),
+            Self::Io(e) => e.kind() == std::io::ErrorKind::InvalidInput,
         }
     }
 }
@@ -1169,7 +1169,7 @@ mod tests {
         assert!(to.exists(), "the file is at its new name");
         let e = super::rename_noreplace(&there, &to).expect_err("the target exists");
         assert!(
-            matches!(&e, OsError::Io(e) if e.raw_os_error() == Some(libc::EEXIST)),
+            matches!(&e, OsError::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists),
             "{e}"
         );
         let _ = std::fs::remove_file(&to);
