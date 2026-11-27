@@ -1919,7 +1919,8 @@ pub(crate) static REGISTRY: &[LeverSpec] = &[
         default: Unset::Is("1"),
         doc: "Host tier, Q4_K weights: `1` runs the one-column kernel, the tile and the \
               row lanes through their AVX-512 VNNI bodies on a CPU with AVX-512 F, BW and \
-              VNNI; `0` keeps the AVX2 bodies, the same-binary arm. Both write the same bits. \
+              VNNI; MXFP4 rows and tiles also use VNNI with AVX-512VL. \
+              `0` keeps the AVX2 bodies, the same-binary arm. Both write the same bits. \
               Read once a process (`qdot::q4k_avx512`).",
         site: Site::Direct {
             at: &[InPlace {

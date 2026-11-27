@@ -54,3 +54,7 @@ For a native build install x64 Visual Studio C++ Build Tools and the Windows SDK
 ```
 
 Rust and CUDA-Oxide revisions come from the repository. The first build downloads compiler components and dependencies. The output is `target\x86_64-pc-windows-msvc\release\bloomery-serve.exe`, which the root launcher discovers automatically.
+
+## MXFP4 CPU acceleration (performance candidate)
+
+On a CPU with AVX-512 VNNI and VL (including Cascade Lake), the packed MXFP4 host row and tile dispatch selects 256-bit VNNI byte-dot instructions. The old AVX2 implementation remains available via `$env:BLOOMERY_QDOT_AVX512 = '0'` before starting the server; unset it or set it to `1` to select the new path where supported. Weight bytes, expert routing, context and residency are unchanged. Compare the two modes with identical model, prompt, context and thread count, restarting the server between modes. The synthetic parity gate compares each selected kernel with the old AVX2 and scalar bodies. A runner without VNNI exercises only the fallback; actual throughput and full-model correctness on the target workstation remain unverified.

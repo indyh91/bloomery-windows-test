@@ -358,6 +358,15 @@ pub fn q4k_avx512() -> bool {
     })
 }
 
+/// Whether MXFP4 uses the 256-bit AVX-512 VNNI byte-dot path.
+/// Shares the QDOT_AVX512 A/B switch and additionally requires AVX-512VL.
+#[cfg(target_arch = "x86_64")]
+#[must_use]
+pub fn mxfp4_vnni() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| q4k_avx512() && std::arch::is_x86_feature_detected!("avx512vl"))
+}
+
 /// The `k` contract: `k` must be a multiple of the weight format's block size
 /// (256 for K-quants, IQ2_XS, IQ2_XXS, IQ1_S, IQ1_M, IQ3_XXS, IQ3_S and IQ4_XS, 64 for Q2_0 and NVFP4, 32 for Q5_0, Q5_1, Q8_0,
 /// MXFP4, NVFP4 rows and IQ4_NL), a generic decoder's block values. A type with no kernel here gets the K-quant contract: its
@@ -636,8 +645,13 @@ pub fn dot_row(w: GgmlType, wrow: &[u8], acol: &[u8], k: usize) -> Result<f32, Q
             Ok(unsafe { dot_iq3s_q8k_avx2(wrow, acol, nb) })
         }
         (GgmlType::MXFP4, true) => {
-            // SAFETY: AVX2+FMA were just detected; lengths validated above.
-            Ok(unsafe { dot_mxfp4_q82x4_avx2(wrow, acol, nb) })
+            if mxfp4_vnni() {
+                // SAFETY: dispatch checked the full VNNI+VL ISA and row lengths above.
+                Ok(unsafe { dot_mxfp4_q82x4_tile_vnni::<1>(wrow, &[acol.as_ptr()], nb) }[0])
+            } else {
+                // SAFETY: AVX2+FMA were just detected; lengths validated above.
+                Ok(unsafe { dot_mxfp4_q82x4_avx2(wrow, acol, nb) })
+            }
         }
         (GgmlType::NVFP4, true) => {
             // SAFETY: AVX2+FMA were just detected; check_row sized the row and the column for nb units.
@@ -1001,7 +1015,15 @@ fn tile<const C: usize>(kind: TileKind, wrow: &[u8], acols: &[&[u8]], nb: usize,
         TileKind::Iq4Nl => unsafe { dot_iq4nl_q82x4_tile_avx2::<C>(wrow, &cols, nb) },
         // SAFETY: tile_kind saw AVX2+FMA; check_row sized the row for nb blocks
         // and every column for nb blocks' x4 groups and q8_2 tails.
-        TileKind::Mxfp4 => unsafe { dot_mxfp4_q82x4_tile_avx2::<C>(wrow, &cols, nb) },
+        TileKind::Mxfp4 => {
+            if mxfp4_vnni() {
+                // SAFETY: dispatch checked the additional VNNI+VL ISA; lengths as above.
+                unsafe { dot_mxfp4_q82x4_tile_vnni::<C>(wrow, &cols, nb) }
+            } else {
+                // SAFETY: tile_kind checked AVX2+FMA and the lengths were validated.
+                unsafe { dot_mxfp4_q82x4_tile_avx2::<C>(wrow, &cols, nb) }
+            }
+        }
     };
     out.copy_from_slice(&v);
 }
@@ -9668,6 +9690,150 @@ unsafe fn dot_mxfp4_q82x4_tile_avx2<const C: usize>(
                 *am = _mm_add_ps(*am, _mm_set1_ps(corr));
                 let qs = _mm256_loadu_si256(t.add(4) as *const __m256i);
                 let p0 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx0, qs));
+                *a = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(p0), *a);
+            }
+        }
+
+        // Reduction order is load-bearing: the one-column kernel's, per column.
+        let mut out = [0.0f32; C];
+        for ((o, a), am) in out.iter_mut().zip(&acc).zip(&accm) {
+            let sum = _mm_add_ps(_mm256_castps256_ps128(*a), _mm256_extractf128_ps(*a, 1));
+            let x = _mm_add_ps(sum, *am);
+            let x = _mm_add_ps(x, _mm_movehl_ps(x, x));
+            *o = _mm_cvtss_f32(_mm_add_ss(x, _mm_movehdup_ps(x)));
+        }
+        out
+    }
+}
+
+/// MXFP4 tile using VNNI's exact unsigned-byte by signed-byte dot product.
+/// The AVX2 pair sums cannot saturate (2 * 24 * 128 < 32768), so replacing
+/// maddubs + madd with dpbusd preserves every integer lane and float operation.
+/// Keep the scale, tail and reduction order in sync with the AVX2 tile.
+///
+/// # Safety
+/// AVX2, FMA, AVX-512 F/BW/VL/VNNI and validated row/column lengths required.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(
+    enable = "avx2",
+    enable = "fma",
+    enable = "avx512f",
+    enable = "avx512bw",
+    enable = "avx512vl",
+    enable = "avx512vnni"
+)]
+unsafe fn dot_mxfp4_q82x4_tile_vnni<const C: usize>(
+    wrow: &[u8],
+    acols: &[*const u8; C],
+    nb: usize,
+) -> [f32; C] {
+    const { assert!(C != 0 && C <= TILE_COLS) };
+    // SAFETY: VNNI+VL and AVX2+FMA present; `wrow` holds nb blocks and every column the
+    // Q8_2_X4 groups and q8_2 tails of nb blocks per contract.
+    unsafe {
+        let m4 = _mm256_set1_epi8(0xF);
+        // SAFETY: 16 readable bytes of the static table.
+        let t128 = _mm_loadu_si128(KVALUES_MXFP4_U.as_ptr() as *const __m128i);
+        let table = _mm256_set_m128i(t128, t128);
+        let zero = _mm256_setzero_si256();
+        let ones = _mm_set1_epi32(1);
+        let min12 = _mm_set1_ps(-12.0f32);
+        let mut acc = [_mm256_setzero_ps(); C];
+        let mut accm = [_mm_setzero_ps(); C];
+
+        let nbg = nb / 4;
+        for i in 0..nbg {
+            let b0 = wrow.as_ptr().add((4 * i) * MXFP4_BLOCK);
+            let b1 = b0.add(MXFP4_BLOCK);
+            let b2 = b1.add(MXFP4_BLOCK);
+            let b3 = b2.add(MXFP4_BLOCK);
+            // SAFETY: 16 readable bytes at offset 1 of each validated block.
+            let qx0 = lut4_codes(b0.add(1), m4, table);
+            let qx1 = lut4_codes(b1.add(1), m4, table);
+            let qx2 = lut4_codes(b2.add(1), m4, table);
+            let qx3 = lut4_codes(b3.add(1), m4, table);
+            // ScaleHelperQ_0_1_MXFP4::prepare4: (e - 1) << 23, with the two
+            // subnormal halves for e = 0 and e = 1.
+            let packed = u32::from(*b0)
+                | (u32::from(*b1) << 8)
+                | (u32::from(*b2) << 16)
+                | (u32::from(*b3) << 24);
+            let e32 = _mm_cvtepu8_epi32(_mm_cvtsi32_si128(packed as i32));
+            let r = _mm_slli_epi32::<23>(_mm_sub_epi32(e32, ones));
+            let r = _mm_blendv_epi8(
+                r,
+                _mm_set1_epi32(0x0020_0000),
+                _mm_cmpeq_epi32(e32, _mm_setzero_si128()),
+            );
+            let r = _mm_blendv_epi8(r, _mm_set1_epi32(0x0040_0000), _mm_cmpeq_epi32(e32, ones));
+            let s4 = _mm_castsi128_ps(r);
+            let other = _mm256_set_m128(_mm_mul_ps(s4, min12), s4);
+
+            for ((col, a), am) in acols.iter().zip(acc.iter_mut()).zip(accm.iter_mut()) {
+                // SAFETY: 8 readable bytes at the head of the column's group i.
+                let g = col.add(i * Q82X4_STRIDE);
+                let aux_d = _mm_castsi128_ps(_mm_slli_epi32::<16>(_mm_cvtepu16_epi32(
+                    _mm_loadl_epi64(g as *const __m128i),
+                )));
+                // SAFETY: 8 readable bytes at offset 8 of the group.
+                let aux_m = _mm_cvtepi32_ps(_mm_cvtepi16_epi32(_mm_loadl_epi64(
+                    g.add(8) as *const __m128i
+                )));
+                let prep = _mm256_set_m128(_mm_mul_ps(aux_d, aux_m), aux_d);
+                let s12 = _mm256_mul_ps(other, prep);
+                *am = _mm_add_ps(*am, _mm256_extractf128_ps(s12, 1));
+                let lo = _mm256_castps256_ps128(s12);
+                let dall = _mm256_set_m128(lo, lo);
+
+                // SAFETY: 32 readable bytes at each offset inside the group.
+                let p0 = _mm256_dpbusd_epi32(
+                    zero,
+                    qx0,
+                    _mm256_loadu_si256(g.add(16) as *const __m256i),
+                );
+                let p1 = _mm256_dpbusd_epi32(
+                    zero,
+                    qx1,
+                    _mm256_loadu_si256(g.add(48) as *const __m256i),
+                );
+                let p2 = _mm256_dpbusd_epi32(
+                    zero,
+                    qx2,
+                    _mm256_loadu_si256(g.add(80) as *const __m256i),
+                );
+                let p3 = _mm256_dpbusd_epi32(
+                    zero,
+                    qx3,
+                    _mm256_loadu_si256(g.add(112) as *const __m256i),
+                );
+                let p01 =
+                    _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1));
+                let p23 =
+                    _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3));
+                let pall = _mm256_add_epi32(
+                    _mm256_unpacklo_epi64(p01, p23),
+                    _mm256_unpackhi_epi64(p01, p23),
+                );
+                *a = _mm256_fmadd_ps(dall, _mm256_cvtepi32_ps(pall), *a);
+            }
+        }
+
+        let nb4 = 4 * nbg;
+        for i in nb4..nb {
+            let wb = wrow.as_ptr().add(i * MXFP4_BLOCK);
+            let dw = e8m0_to_f32_half(*wb);
+            let qx0 = lut4_codes(wb.add(1), m4, table);
+            let tb = nb4 / 4 * Q82X4_STRIDE + (i - nb4) * Q82_BLOCK;
+            for ((col, a), am) in acols.iter().zip(acc.iter_mut()).zip(accm.iter_mut()) {
+                // SAFETY: the tail block's 36 bytes are inside the column.
+                let t = col.add(tb);
+                let da = bf16_bits_to_f32(u16::from_le_bytes([*t, *t.add(1)]));
+                let ma = i16::from_le_bytes([*t.add(2), *t.add(3)]) as f32;
+                let d = dw * da;
+                let corr = (-12.0f32 * dw) * (da * ma) * 0.25f32;
+                *am = _mm_add_ps(*am, _mm_set1_ps(corr));
+                let qs = _mm256_loadu_si256(t.add(4) as *const __m256i);
+                let p0 = _mm256_dpbusd_epi32(zero, qx0, qs);
                 *a = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(p0), *a);
             }
         }
