@@ -37,6 +37,7 @@ jobs:
           cargo test --locked -p bloomery-model-hf --test ernie55_quantize --target x86_64-pc-windows-msvc native_ernie_cache_round_trip
           exit $LASTEXITCODE
   build:
+    needs: windows-tests
     runs-on: windows-2022
     timeout-minutes: 100
     steps:

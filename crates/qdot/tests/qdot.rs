@@ -1084,7 +1084,6 @@ impl Q5kCase {
 }
 
 fn load_q5k(rows: usize) -> Q5kCase {
-    use std::os::unix::fs::FileExt;
     // The V4.1 set whose first shard is [`gguf::v41::model`]; `BLOOMERY_Q5K_MODEL` overrides it. The
     // scan walks the set's shards in order, as `tools/ref/q5k_x4_ref.cpp` does.
     let first = std::env::var("BLOOMERY_Q5K_MODEL").unwrap_or_else(|_| gguf::v41::model());
@@ -1114,7 +1113,11 @@ fn load_q5k(rows: usize) -> Q5kCase {
     );
     let mut bytes = vec![0u8; rows * row_bytes];
     std::fs::File::open(&path)
-        .and_then(|f| f.read_exact_at(&mut bytes, inv.data_base + t.offset))
+        .and_then(|mut f| {
+            use std::io::{Read, Seek, SeekFrom};
+            f.seek(SeekFrom::Start(inv.data_base + t.offset))?;
+            f.read_exact(&mut bytes)
+        })
         .unwrap_or_else(|e| panic!("{path}: read {}: {e}", t.name));
     // The attn_norm-0 dump is 2048 values per token: the first k = 2304 are token 0 and the
     // start of token 1, the column the ik harness reads.
@@ -1352,7 +1355,6 @@ struct FileCase {
 
 impl FileCase {
     fn load(ty: GgmlType, rows: usize) -> FileCase {
-        use std::os::unix::fs::FileExt;
         let (gran, block): (usize, usize) = match ty {
             GgmlType::IQ3_XXS => (256, 98),
             GgmlType::MXFP4 => (32, 17),
@@ -1376,7 +1378,11 @@ impl FileCase {
         );
         let mut bytes = vec![0u8; rows * row_bytes];
         std::fs::File::open(&path)
-            .and_then(|f| f.read_exact_at(&mut bytes, inv.data_base + t.offset))
+            .and_then(|mut f| {
+                use std::io::{Read, Seek, SeekFrom};
+                f.seek(SeekFrom::Start(inv.data_base + t.offset))?;
+                f.read_exact(&mut bytes)
+            })
             .unwrap_or_else(|e| panic!("{path}: read {}: {e}", t.name));
         let xs = oracle_f32("attn_norm-0", 2048 * 6)[..k].to_vec();
         let mut acol = vec![0u8; col_bytes(ty, k)];
@@ -5323,7 +5329,6 @@ fn split_rows(
     prefer: &str,
     rows: usize,
 ) -> (String, usize, usize, Vec<u8>) {
-    use std::os::unix::fs::FileExt;
     let shards = shard_paths(first);
     for path in &shards {
         let inv = gguf::inventory_of(path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -5346,7 +5351,11 @@ fn split_rows(
         );
         let mut bytes = vec![0u8; rows * row_bytes];
         std::fs::File::open(path)
-            .and_then(|f| f.read_exact_at(&mut bytes, inv.data_base + t.offset))
+            .and_then(|mut f| {
+                use std::io::{Read, Seek, SeekFrom};
+                f.seek(SeekFrom::Start(inv.data_base + t.offset))?;
+                f.read_exact(&mut bytes)
+            })
             .unwrap_or_else(|e| panic!("{path}: read {}: {e}", t.name));
         return (t.name.clone(), k, row_bytes, bytes);
     }
